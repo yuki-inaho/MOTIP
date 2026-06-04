@@ -12,6 +12,7 @@ from .dancetrack import DanceTrack
 from .sportsmot import SportsMOT
 from .crowdhuman import CrowdHuman
 from .bft import BFT
+from .pseudo_mot import PseudoMOT
 
 
 dataset_classes = {
@@ -19,6 +20,7 @@ dataset_classes = {
     "SportsMOT": SportsMOT,
     "CrowdHuman": CrowdHuman,
     "BFT": BFT,
+    "PseudoMOT": PseudoMOT,
 }
 
 
@@ -52,10 +54,18 @@ class JointDataset(Dataset):
         self.annotations = defaultdict(lambda: defaultdict(dict))
         for dataset, split in zip(datasets, splits):
             try:
+                dataset_kwargs = {}
+                if dataset == "PseudoMOT":
+                    dataset_kwargs = {
+                        "sub_dir": kwargs.get("pseudomot_sub_dir", "TomatoTrackletMOT"),
+                        "label_file_name": kwargs.get("pseudomot_label_file_name", "gt.txt"),
+                        "allow_empty_frames": kwargs.get("pseudomot_allow_empty_frames", False),
+                    }
                 dataset_class = dataset_classes[dataset](
                     data_root=data_root,
                     split=split,
                     load_annotation=True,
+                    **dataset_kwargs,
                 )
                 self.sequence_infos[dataset][split] = dataset_class.get_sequence_infos()
                 self.image_paths[dataset][split] = dataset_class.get_image_paths()

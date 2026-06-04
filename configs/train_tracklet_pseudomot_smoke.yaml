@@ -1,0 +1,60 @@
+SUPER_CONFIG_PATH: ./configs/r50_deformable_detr_motip_dancetrack.yaml
+
+# Dataset:
+DATA_ROOT: ./datasets/
+DATASETS: [PseudoMOT]
+DATASET_SPLITS: [train]
+PSEUDOMOT_SUB_DIR: TomatoTrackletMOT
+PSEUDOMOT_LABEL_FILE_NAME: gt.txt
+PSEUDOMOT_ALLOW_EMPTY_FRAMES: False
+
+# Smoke sampling:
+SAMPLE_STEPS: [0]
+SAMPLE_LENGTHS: [2]
+SAMPLE_INTERVALS: [1]
+LENGTH_PER_ITERATION:
+NUM_WORKERS: 0
+PREFETCH_FACTOR: 2
+BATCH_SIZE: 1
+EPOCHS: 1
+MAX_TRAIN_STEPS: 2
+SAVE_CHECKPOINT_PER_EPOCH: 1
+MULTI_LAST_CHECKPOINTS: 0
+
+# Keep this tiny enough for an L4 smoke run.
+AUG_RESIZE_SCALES: [320]
+AUG_MAX_SIZE: 640
+AUG_RANDOM_RESIZE: [320]
+AUG_RANDOM_CROP_MIN: 256
+AUG_RANDOM_CROP_MAX: 320
+AUG_BRIGHTNESS: 0.0
+AUG_CONTRAST: 0.0
+AUG_SATURATION: 0.0
+AUG_HUE: 0.0
+AUG_TRAJECTORY_OCCLUSION_PROB: 0.0
+AUG_TRAJECTORY_SWITCH_PROB: 0.0
+AUG_NUM_GROUPS: 1
+
+# Train both DETR and ID path for a real MOTIP loop smoke.
+ONLY_DETR: False
+NUM_ID_VOCABULARY: 64
+NUM_TRAINING_IDS: 64
+DETR_NUM_TRAIN_FRAMES: 1
+DETR_NUM_CHECKPOINT_FRAMES: 1
+DETR_CRITERION_BATCH_LEN: 2
+USE_DECODER_CHECKPOINT: False
+LR_WARMUP_EPOCHS: 0
+ACCUMULATE_STEPS: 1
+
+# Pretrain must exist. This file is created by the setup/pretrain preparation step.
+DETR_PRETRAIN: ./pretrains/r50_deformable_detr_coco_dancetrack.pth
+RESUME_MODEL:
+
+# Disable during-train eval for smoke.
+INFERENCE_DATASET:
+INFERENCE_SPLIT:
+
+# Outputs:
+OUTPUTS_DIR: ./outputs/tracklet_pseudomot_smoke
+EXP_NAME: tracklet_pseudomot_smoke
+USE_WANDB: False

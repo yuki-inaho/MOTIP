@@ -183,6 +183,7 @@ def train_engine(config: dict):
             separate_clip_norm=config.get("SEPARATE_CLIP_NORM", True),
             max_clip_norm=config.get("MAX_CLIP_NORM", 0.1),
             use_accelerate_clip_norm=config.get("USE_ACCELERATE_CLIP_NORM", True),
+            max_train_steps=config.get("MAX_TRAIN_STEPS"),
             # For multi last checkpoints:
             outputs_dir=outputs_dir,
             is_last_epochs=(epoch == config["EPOCHS"] - 1),
@@ -216,7 +217,7 @@ def train_engine(config: dict):
                 only_detr=only_detr,
             )
             if config["INFERENCE_DATASET"] is not None:
-                assert config["INFERENCE_SPLIT"] is not None, f"Please set the INFERENCE_SPLIT for inference."
+                assert config["INFERENCE_SPLIT"] is not None, "Please set the INFERENCE_SPLIT for inference."
                 eval_metrics = submit_and_evaluate_one_model(
                     is_evaluate=True,
                     accelerator=accelerator,
@@ -280,6 +281,7 @@ def train_one_epoch(
         max_clip_norm: float = 0.1,
         use_accelerate_clip_norm: bool = True,
         logging_interval: int = 20,
+        max_train_steps: int | None = None,
         # For multi last checkpoints:
         outputs_dir: str = None,
         is_last_epochs: bool = False,
@@ -307,7 +309,7 @@ def train_one_epoch(
             other_params.append(param)
 
     for step, samples in enumerate(dataloader):
-        images, annotations, metas = samples["images"], samples["annotations"], samples["metas"]
+        images, annotations, _metas = samples["images"], samples["annotations"], samples["metas"]
         # Normalize the images:
         # (Normally, it should be done in the dataloader, but here we do it in the training loop (on cuda).)
         mean = [0.485, 0.456, 0.406]
@@ -518,6 +520,9 @@ def train_one_epoch(
                 current_last_checkpoint_idx += 1
         # Update the counters:
         states["global_step"] += 1
+        if max_train_steps is not None and states["global_step"] >= max_train_steps:
+            logger.info(log=f"Stop training early at global_step={states['global_step']} by MAX_TRAIN_STEPS={max_train_steps}.")
+            break
     states["start_epoch"] += 1
     return metrics
 

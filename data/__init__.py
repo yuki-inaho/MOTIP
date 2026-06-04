@@ -14,6 +14,9 @@ def build_dataset(config: dict):
         splits=config["DATASET_SPLITS"],
         transforms=build_transforms(config),
         size_divisibility=config.get("SIZE_DIVISIBILITY", 0),
+        pseudomot_sub_dir=config.get("PSEUDOMOT_SUB_DIR", "TomatoTrackletMOT"),
+        pseudomot_label_file_name=config.get("PSEUDOMOT_LABEL_FILE_NAME", "gt.txt"),
+        pseudomot_allow_empty_frames=config.get("PSEUDOMOT_ALLOW_EMPTY_FRAMES", False),
     )
 
 

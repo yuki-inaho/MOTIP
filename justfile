@@ -1,5 +1,11 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 venv := "/home/kasm-user/Desktop/MOTIP/.venv"
+tracklet_coco := "/home/kasm-user/Desktop/tomato_tracking_deim_mot/outputs/nyx660_jun04/coco_good.json"
+tracklet_images := "/home/kasm-user/Desktop/NYX660_2025_12_01_17_33_27_0135/Color"
+tracklet_dataset := "datasets/TomatoTrackletMOT"
+tracklet_config := "configs/train_tracklet_pseudomot_smoke.yaml"
+motip_dancetrack_ckpt := "outputs/r50_deformable_detr_motip_dancetrack/r50_deformable_detr_motip_dancetrack.pth"
+tracklet_detr_pretrain := "pretrains/r50_deformable_detr_coco_dancetrack.pth"
 
 sync:
     UV_PROJECT_ENVIRONMENT="{{venv}}" uv sync
@@ -24,3 +30,18 @@ demo-requirements-check:
 
 demo-smoke MAX_FRAMES="3":
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python demo/video_process_smoke.py --max-frames "{{MAX_FRAMES}}"
+
+build-tracklet-pseudomot:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python tools/convert_coco_tracklets_to_pseudomot.py --coco "{{tracklet_coco}}" --image-dir "{{tracklet_images}}" --output-root "{{tracklet_dataset}}" --sequence-name nyx660_jun04 --split train
+
+prepare-tracklet-pretrain:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python tools/extract_detr_pretrain.py --source "{{motip_dancetrack_ckpt}}" --output "{{tracklet_detr_pretrain}}"
+
+config-tracklet-smoke:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["DATA_ROOT", "DATASETS", "DATASET_SPLITS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "EPOCHS", "MAX_TRAIN_STEPS", "DETR_PRETRAIN", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
+loader-tracklet-smoke:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python -c 'from data.joint_dataset import JointDataset; ds = JointDataset(data_root="./datasets", datasets=["PseudoMOT"], splits=["train"], pseudomot_sub_dir="TomatoTrackletMOT"); ds.set_sample_details(sample_length=2, sample_interval=1); print(ds.statistics()); print("samples", len(ds))'
+
+train-tracklet-smoke:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python train.py --config-path "{{tracklet_config}}"

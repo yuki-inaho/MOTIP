@@ -50,3 +50,6 @@ torchvision = [
 torchaudio = [
   { index = "pytorch-cu118", marker = "sys_platform == 'linux'" },
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
