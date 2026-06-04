@@ -42,3 +42,7 @@ Thumbs.db
 *~
 .vscode/
 .ipynb_checkpoints/
+
+# Claude Code / agent local files
+CLAUDE.md
+.claude/
