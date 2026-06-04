@@ -88,7 +88,10 @@
   just config-tracklet-full                    # 本格 config 主要キー表示
   just train-tracklet-full                     # 本格学習（bf16/EMA/TB/early-stop）
   just tb                                       # TensorBoard
+  just infer-tracklet-full [N]                  # 学習済モデルで追跡推論 → JSON(+MOTChallenge txt)。N=フレーム数(0=全)
+  just visualize-tracklet-full [N]             # 推論JSONを元フレームへ描画 → 注釈フレーム＋mp4
   ```
+  - 推論/可視化は `tools/infer_tracklet.py`（`RuntimeTracker` を frame毎に回し `outputs/.../infer/tracks.json` と `tracks_mot.txt` を出力）/ `tools/visualize_tracks.py`（JSON+元画像→ bbox+ID 描画）。既定で `checkpoint_7.pth` の EMA 重みを使用。出力は `outputs/`（git外）。
 - **依存ライブラリ:** torch 2.4.0+cu118 / torchvision / accelerate / tensorboard / einops / pycocotools / numpy<2 / pytest / ruff（詳細は `pyproject.toml` と `uv.lock`）。CUDA op: `models/ops`（`just build-ops`）。
 - **連絡先/責任者:** yoshikawa@inaho.co（yuki-inaho）。
 

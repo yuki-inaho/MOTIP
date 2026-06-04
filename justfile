@@ -74,3 +74,24 @@ train-tracklet-full:
 # TensorBoard for the full run (point --logdir at the run's train/tb directory).
 tb:
     UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync tensorboard --logdir outputs/tracklet_pseudomot_full/train/tb
+
+# --- Tracklet inference & visualization ---
+tracklet_full_ckpt := "outputs/tracklet_pseudomot_full/checkpoint_7.pth"
+tracklet_seq_images := "datasets/TomatoTrackletMOT/train/nyx660_jun04/img1"
+tracklet_infer_json := "outputs/tracklet_pseudomot_full/infer/tracks.json"
+
+# Run MOTIP tracking inference on the tomato sequence -> JSON (+ MOTChallenge txt). MAX=0 = all frames.
+infer-tracklet-full MAX="0" DTYPE="fp32":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/infer_tracklet.py \
+        --config "{{tracklet_full_config}}" --checkpoint "{{tracklet_full_ckpt}}" --use-ema \
+        --image-dir "{{tracklet_seq_images}}" --output-json "{{tracklet_infer_json}}" \
+        --output-mot "outputs/tracklet_pseudomot_full/infer/tracks_mot.txt" \
+        --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
+
+# Render tracking JSON onto the source frames -> annotated frames (+ optional mp4). MAX=0 = all.
+visualize-tracklet-full MAX="0":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/visualize_tracks.py \
+        --tracks-json "{{tracklet_infer_json}}" --image-dir "{{tracklet_seq_images}}" \
+        --output-dir "outputs/tracklet_pseudomot_full/infer/viz" \
+        --output-video "outputs/tracklet_pseudomot_full/infer/tracks.mp4" --fps 15 --show-score \
+        --max-frames "{{MAX}}"
