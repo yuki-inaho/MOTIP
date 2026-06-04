@@ -2,3 +2,28 @@
 
 # PyCharm
 .idea/
+
+# Python / uv
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+models/ops/build/
+models/ops/*.egg-info/
+
+# Large local artifacts
+*.pth
+*.pt
+*.onnx
+*.engine
+*.mp4
+*.avi
+*.mov
+pretrains/
+outputs/
+datasets/
