@@ -1,0 +1,39 @@
+# ID-improvement fine-tune: longer clips + stronger ID constraint.
+#
+# Strategy (user-chosen option 1: "SL=[16] warm-start ID re-training"):
+#   - Warm-start the DETECTOR from the tomato-trained checkpoint_7 (detr.* keys
+#     extracted to pretrains/detr_tomato_ckpt7.pth). The ID head (decoder + the
+#     ID vocabulary embeddings) is re-initialized and re-trained, because the ID
+#     vocabulary size changes (160 -> 192) so its embeddings cannot be reused.
+#   - SAMPLE_LENGTHS [10] -> [16]: longer association context for the ID head.
+#       clip-internal max unique track ids @ SL=16, interval<=4 = 164  (measured)
+#       -> NUM_ID_VOCABULARY = 192 (164 + 28 margin, <= 300 is_legal cap) so the
+#          GenerateIDLabels randperm truncation never fires.
+#   - ID_LOSS_WEIGHT 1.0 -> 5.0: strengthen the ID constraint (detection already
+#     converged on checkpoint_7; force the optimizer to drive the ID loss down).
+#   - AUG_TRAJECTORY_SWITCH_PROB 0.5 -> 0.7: harder ID augmentation for robustness.
+#
+# Inherits bf16 AMP / EMA / TensorBoard / early-stop / OOM mitigations from the
+# full config. VRAM @ SL=16 ~ 8.7 GB on L4 (measured), ~1 h/epoch.
+
+SUPER_CONFIG_PATH: ./configs/train_tracklet_pseudomot_full.yaml
+
+# Longer clips + matching ID vocabulary (no silent truncation: 164 <= 192).
+SAMPLE_LENGTHS: [16]
+NUM_ID_VOCABULARY: 192
+NUM_TRAINING_IDS: 192
+
+# Warm-start detection from the tomato-trained checkpoint; re-train the ID head.
+DETR_PRETRAIN: ./pretrains/detr_tomato_ckpt7.pth
+RESUME_MODEL:
+
+# Stronger ID constraint + harder ID augmentation.
+ID_LOSS_WEIGHT: 5.0
+AUG_TRAJECTORY_SWITCH_PROB: 0.7
+
+# ~5 h on L4 (5 x ~1 h). No MAX_TRAIN_STEPS (real epochs). early-stop inherited.
+EPOCHS: 5
+
+# Separate outputs so the original run stays intact.
+OUTPUTS_DIR: ./outputs/tracklet_pseudomot_id16
+EXP_NAME: tracklet_pseudomot_id16
