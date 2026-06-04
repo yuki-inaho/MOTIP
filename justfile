@@ -3,8 +3,10 @@ venv := "/home/kasm-user/Desktop/MOTIP/.venv"
 tracklet_coco := "/home/kasm-user/Desktop/tomato_tracking_deim_mot/outputs/nyx660_jun04/coco_good.json"
 tracklet_images := "/home/kasm-user/Desktop/NYX660_2025_12_01_17_33_27_0135/Color"
 tracklet_dataset := "datasets/TomatoTrackletMOT"
+tracklet_5fps_dataset := "datasets/TomatoTrackletMOT_5fps"
 tracklet_config := "configs/train_tracklet_pseudomot_smoke.yaml"
 tracklet_full_config := "configs/train_tracklet_pseudomot_full.yaml"
+tracklet_5fps_config := "configs/finetune_tracklet_pseudomot_5fps_id16.yaml"
 motip_dancetrack_ckpt := "outputs/r50_deformable_detr_motip_dancetrack/r50_deformable_detr_motip_dancetrack.pth"
 tracklet_detr_pretrain := "pretrains/r50_deformable_detr_coco_dancetrack.pth"
 
@@ -51,6 +53,12 @@ demo-smoke MAX_FRAMES="3":
 build-tracklet-pseudomot:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python tools/convert_coco_tracklets_to_pseudomot.py --coco "{{tracklet_coco}}" --image-dir "{{tracklet_images}}" --output-root "{{tracklet_dataset}}" --sequence-name nyx660_jun04 --split train
 
+build-tracklet-pseudomot-5fps:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/convert_coco_tracklets_to_pseudomot.py \
+        --coco "{{tracklet_coco}}" --image-dir "{{tracklet_images}}" \
+        --output-root "{{tracklet_5fps_dataset}}" --sequence-name nyx660_jun04_stride6 \
+        --split train --frame-rate 5 --frame-stride 6
+
 prepare-tracklet-pretrain:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python tools/extract_detr_pretrain.py --source "{{motip_dancetrack_ckpt}}" --output "{{tracklet_detr_pretrain}}"
 
@@ -60,6 +68,9 @@ config-tracklet-smoke:
 loader-tracklet-smoke:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python -c 'from data.joint_dataset import JointDataset; ds = JointDataset(data_root="./datasets", datasets=["PseudoMOT"], splits=["train"], pseudomot_sub_dir="TomatoTrackletMOT"); ds.set_sample_details(sample_length=2, sample_interval=1); print(ds.statistics()); print("samples", len(ds))'
 
+loader-tracklet-5fps:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from data.joint_dataset import JointDataset; ds = JointDataset(data_root="./datasets", datasets=["PseudoMOT"], splits=["train"], pseudomot_sub_dir="TomatoTrackletMOT_5fps"); ds.set_sample_details(sample_length=16, sample_interval=1); print(ds.statistics()); print("samples", len(ds))'
+
 train-tracklet-smoke:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python train.py --config-path "{{tracklet_config}}"
 
@@ -67,9 +78,17 @@ train-tracklet-smoke:
 config-tracklet-full:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_full_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["DATASETS", "DATASET_SPLITS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "EPOCHS", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "TENSORBOARD", "EARLY_STOP", "USE_DECODER_CHECKPOINT", "INFERENCE_DATASET", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
 
+# Show the resolved key values for the 5FPS ID fine-tune config.
+config-tracklet-5fps:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_5fps_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["DATASETS", "DATASET_SPLITS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "EPOCHS", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "TENSORBOARD", "EARLY_STOP", "AUG_NUM_GROUPS", "ID_LOSS_WEIGHT", "DETR_PRETRAIN", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
 # Launch the FULL tracklet training (background recommended; started in B6, not here).
 train-tracklet-full:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_full_config}}"
+
+# Launch the 5FPS ID fine-tune. Use PYTORCH_CUDA_ALLOC_CONF to reduce allocator fragmentation.
+train-tracklet-5fps:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_5fps_config}}"
 
 # TensorBoard for the full run (point --logdir at the run's train/tb directory).
 tb:
@@ -79,6 +98,9 @@ tb:
 tracklet_full_ckpt := "outputs/tracklet_pseudomot_full/checkpoint_7.pth"
 tracklet_seq_images := "datasets/TomatoTrackletMOT/train/nyx660_jun04/img1"
 tracklet_infer_json := "outputs/tracklet_pseudomot_full/infer/tracks.json"
+tracklet_5fps_ckpt := "outputs/tracklet_pseudomot_5fps_id16/checkpoint_39.pth"
+tracklet_5fps_infer_json := "outputs/tracklet_pseudomot_5fps_id16/infer_30fps/tracks.json"
+tracklet_5fps_comparison_json := "outputs/tracklet_pseudomot_5fps_id16/infer_30fps/comparison.json"
 
 # Run MOTIP tracking inference on the tomato sequence -> JSON (+ MOTChallenge txt). MAX=0 = all frames.
 infer-tracklet-full MAX="0" DTYPE="fp32":
@@ -86,6 +108,14 @@ infer-tracklet-full MAX="0" DTYPE="fp32":
         --config "{{tracklet_full_config}}" --checkpoint "{{tracklet_full_ckpt}}" --use-ema \
         --image-dir "{{tracklet_seq_images}}" --output-json "{{tracklet_infer_json}}" \
         --output-mot "outputs/tracklet_pseudomot_full/infer/tracks_mot.txt" \
+        --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
+
+# Run 5FPS fine-tuned checkpoint over the original 30FPS image sequence -> JSON + MOT txt.
+infer-tracklet-5fps MAX="0" DTYPE="fp32" CKPT=tracklet_5fps_ckpt:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/infer_tracklet.py \
+        --config "{{tracklet_5fps_config}}" --checkpoint "{{CKPT}}" --use-ema \
+        --image-dir "{{tracklet_seq_images}}" --output-json "{{tracklet_5fps_infer_json}}" \
+        --output-mot "outputs/tracklet_pseudomot_5fps_id16/infer_30fps/tracks_mot.txt" \
         --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
 
 # Render tracking JSON -> annotated frames + mp4. MAX=0 = all, FPS default 3.
@@ -103,3 +133,17 @@ video-tracklet-full FPS="3" MAX="0":
         --output-dir "" \
         --output-video "outputs/tracklet_pseudomot_full/infer/tracks.mp4" --fps "{{FPS}}" --show-score \
         --max-frames "{{MAX}}"
+
+# Render 5FPS fine-tuned tracking JSON -> mp4 ONLY. FPS default 3, MAX=0 = all.
+video-tracklet-5fps FPS="3" MAX="0":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/visualize_tracks.py \
+        --tracks-json "{{tracklet_5fps_infer_json}}" --image-dir "{{tracklet_seq_images}}" \
+        --output-dir "" \
+        --output-video "outputs/tracklet_pseudomot_5fps_id16/infer_30fps/tracks.mp4" --fps "{{FPS}}" --show-score \
+        --max-frames "{{MAX}}"
+
+# Compare old full-run tracking JSON and new 5FPS fine-tuned tracking JSON.
+compare-tracklet-5fps:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/compare_track_json.py \
+        --old-json "{{tracklet_infer_json}}" --new-json "{{tracklet_5fps_infer_json}}" \
+        --output-json "{{tracklet_5fps_comparison_json}}"

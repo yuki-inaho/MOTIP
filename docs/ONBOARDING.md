@@ -84,15 +84,23 @@
   uv run --no-sync pytest tests/ -q            # 全テスト
   uv run --no-sync ruff check <files>          # lint
   just build-tracklet-pseudomot                # COCO tracklet → PseudoMOT(MOTChallenge) 変換
+  just build-tracklet-pseudomot-5fps           # 30FPS疑似正解をstride=6で5FPS相当PseudoMOTへ変換
+  just loader-tracklet-5fps                    # 5FPS相当PseudoMOTのloader smoke
   just train-tracklet-smoke                    # 2-step smoke（既定 OFF）
   just config-tracklet-full                    # 本格 config 主要キー表示
   just train-tracklet-full                     # 本格学習（bf16/EMA/TB/early-stop）
+  just config-tracklet-5fps                    # 5FPS ID fine-tune config主要キー表示
+  just train-tracklet-5fps                     # 5FPS相当datasetでID強化fine-tune
   just tb                                       # TensorBoard
   just infer-tracklet-full [N]                  # 学習済モデルで追跡推論 → JSON(+MOTChallenge txt)。N=フレーム数(0=全)
+  just infer-tracklet-5fps [N]                  # 5FPS fine-tuned checkpointで30FPS全frame列へ推論
   just visualize-tracklet-full [N]             # 推論JSONを元フレームへ描画 → 注釈フレーム＋mp4
+  just video-tracklet-5fps 3 0                 # 5FPS fine-tuned推論JSONから3fps mp4のみ生成
+  just compare-tracklet-5fps                   # 旧full runと5FPS fine-tuneのID proxy metrics比較
   ```
   - 推論/可視化は `tools/infer_tracklet.py`（`RuntimeTracker` を frame毎に回し `outputs/.../infer/tracks.json` と `tracks_mot.txt` を出力）/ `tools/visualize_tracks.py`（JSON+元画像→ bbox+ID 描画）。既定で `checkpoint_7.pth` の EMA 重みを使用。出力は `outputs/`（git外）。
-- **依存ライブラリ:** torch 2.4.0+cu118 / torchvision / accelerate / tensorboard / einops / pycocotools / numpy<2 / pytest / ruff（詳細は `pyproject.toml` と `uv.lock`）。CUDA op: `models/ops`（`just build-ops`）。
+  - 5FPS ID fine-tuneは `tools/convert_coco_tracklets_to_pseudomot.py --frame-stride 6` で `datasets/TomatoTrackletMOT_5fps`（git外）を作り、`configs/finetune_tracklet_pseudomot_5fps_id16.yaml` で学習する。既定推論checkpointはsaturation判定で採用した `checkpoint_39.pth`。旧新比較は `tools/compare_track_json.py` が `unique_track_ids / detections` と track length proxy を出す。
+- **依存ライブラリ:** torch 2.4.0+cu118 / torchvision / accelerate / tensorboard / einops / opencv-python / pycocotools / numpy<2 / pytest / ruff（詳細は `pyproject.toml` と `uv.lock`）。CUDA op: `models/ops`（`just build-ops`）。
 - **連絡先/責任者:** yoshikawa@inaho.co（yuki-inaho）。
 
 > ※本資料は必要に応じて拡張・縮退して構いません。記入済みドキュメントはバージョン管理してください。

@@ -63,6 +63,7 @@ def convert_coco_tracklets_to_pseudomot(
     sequence_name: str = "nyx660_jun04",
     split: str = "train",
     frame_rate: int = 30,
+    frame_stride: int = 1,
     link_images: bool = True,
 ) -> dict[str, Any]:
     coco_path = Path(coco_path)
@@ -72,14 +73,20 @@ def convert_coco_tracklets_to_pseudomot(
     images = sorted(data["images"], key=lambda item: item["file_name"])
     if not images:
         raise ValueError(f"COCO file has no images: {coco_path}")
+    if frame_stride < 1:
+        raise ValueError(f"frame_stride must be >= 1, got {frame_stride}")
+    selected_images = images[::frame_stride]
+    if not selected_images:
+        raise ValueError(f"frame_stride={frame_stride} selected no images from {coco_path}")
 
     image_by_id = {image["id"]: image for image in images}
-    frame_by_image_id = {image["id"]: idx + 1 for idx, image in enumerate(images)}
-    width = int(images[0]["width"])
-    height = int(images[0]["height"])
+    frame_by_image_id = {image["id"]: idx + 1 for idx, image in enumerate(selected_images)}
+    selected_image_ids = set(frame_by_image_id)
+    width = int(selected_images[0]["width"])
+    height = int(selected_images[0]["height"])
     output_paths = _prepare_output_dirs(output_root, split, sequence_name)
 
-    for frame_idx, image in enumerate(images, start=1):
+    for frame_idx, image in enumerate(selected_images, start=1):
         if int(image["width"]) != width or int(image["height"]) != height:
             raise ValueError("All images must have the same width and height for one MOT sequence")
         src = image_dir / image["file_name"]
@@ -90,10 +97,14 @@ def convert_coco_tracklets_to_pseudomot(
     track_ids: set[int] = set()
     num_input_annotations = len(data["annotations"])
     num_skipped_degenerate = 0      # degenerate bboxes (w<=0 or h<=0); counted, not silently dropped.
+    num_skipped_by_frame_stride = 0
     for annotation in data["annotations"]:
         image_id = annotation["image_id"]
         if image_id not in image_by_id:
             raise ValueError(f"annotation references missing image_id={image_id}")
+        if image_id not in selected_image_ids:
+            num_skipped_by_frame_stride += 1
+            continue
         attributes = annotation.get("attributes") or {}
         if "track_id" not in attributes:
             raise ValueError(f"annotation id={annotation.get('id')} has no attributes.track_id")
@@ -134,7 +145,7 @@ def convert_coco_tracklets_to_pseudomot(
         sequence_name=sequence_name,
         width=width,
         height=height,
-        length=len(images),
+        length=len(selected_images),
         frame_rate=frame_rate,
     )
 
@@ -144,9 +155,16 @@ def convert_coco_tracklets_to_pseudomot(
         "output_root": str(output_root),
         "sequence_name": sequence_name,
         "split": split,
-        "num_frames": len(images),
+        "source_num_frames": len(images),
+        "num_frames": len(selected_images),
+        "frame_rate": frame_rate,
+        "frame_stride": frame_stride,
+        "selected_source_image_ids": [image["id"] for image in selected_images],
+        "selected_source_file_names": [image["file_name"] for image in selected_images],
+        "source_to_output_frame_ids": {str(image_id): frame_id for image_id, frame_id in frame_by_image_id.items()},
         "num_input_annotations": num_input_annotations,
         "num_skipped_degenerate": num_skipped_degenerate,
+        "num_skipped_by_frame_stride": num_skipped_by_frame_stride,
         "num_objects": len(rows),
         "num_tracks": len(track_ids),
         "min_frame": rows[0][0] if rows else None,
@@ -167,6 +185,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sequence-name", default="nyx660_jun04")
     parser.add_argument("--split", default="train")
     parser.add_argument("--frame-rate", default=30, type=int)
+    parser.add_argument("--frame-stride", default=1, type=int, help="Keep every Nth source frame; 1 keeps all frames.")
     parser.add_argument("--copy-images", action="store_true", help="Copy images instead of creating symlinks.")
     return parser.parse_args()
 
@@ -180,6 +199,7 @@ def main() -> None:
         sequence_name=args.sequence_name,
         split=args.split,
         frame_rate=args.frame_rate,
+        frame_stride=args.frame_stride,
         link_images=not args.copy_images,
     )
     print(json.dumps(summary, indent=2))

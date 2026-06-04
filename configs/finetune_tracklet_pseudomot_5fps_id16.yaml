@@ -1,0 +1,64 @@
+# ID-improvement fine-tune on a physically subsampled 5FPS PseudoMOT dataset.
+#
+# Rationale:
+#   - The source pseudo labels are 30FPS. The original full model learned
+#     SAMPLE_LENGTHS=[10] over short real-time spans and produced weak ID
+#     persistence at inference time.
+#   - `TomatoTrackletMOT_5fps` is generated with --frame-stride 6, so contiguous
+#     SAMPLE_LENGTHS=[16] spans about 3.0 seconds of source time while keeping the
+#     transformer clip length moderate.
+#   - Exhaustive read-only analysis of the stride=6 GT gives max clip-internal
+#     unique track IDs = 203 for SL=16. Use 224 to avoid GenerateIDLabels
+#     truncation with margin (203 <= 224).
+#
+# The detector is warm-started from the tomato-trained checkpoint_7 DETR weights
+# (pretrains/detr_tomato_ckpt7.pth). The ID head is re-trained because the ID
+# vocabulary changes from 160 to 224.
+
+SUPER_CONFIG_PATH: ./configs/train_tracklet_pseudomot_full.yaml
+
+# Dataset: 30FPS source tracklets physically subsampled to 5FPS.
+PSEUDOMOT_SUB_DIR: TomatoTrackletMOT_5fps
+PSEUDOMOT_LABEL_FILE_NAME: gt.txt
+PSEUDOMOT_ALLOW_EMPTY_FRAMES: False
+
+# 5FPS fixed clips: contiguous frames in the subsampled dataset.
+SAMPLE_STEPS: [0]
+SAMPLE_LENGTHS: [16]
+SAMPLE_INTERVALS: [1]
+LENGTH_PER_ITERATION:
+
+# No silent truncation: max unique IDs per SL=16 5FPS clip is 203.
+NUM_ID_VOCABULARY: 224
+NUM_TRAINING_IDS: 224
+
+# Warm-start detection from the already-trained tomato model; train ID path anew.
+DETR_PRETRAIN: ./pretrains/detr_tomato_ckpt7.pth
+RESUME_MODEL:
+
+# Stronger ID constraint and harder switch augmentation.
+ID_LOSS_WEIGHT: 5.0
+AUG_TRAJECTORY_SWITCH_PROB: 0.7
+
+# L4-safe ID decoder memory profile. Keep bf16 inherited from full config.
+AUG_NUM_GROUPS: 3
+
+# 5FPS dataset is short (204 frames -> 189 samples/epoch at SL=16). The first
+# long run saturated by epoch 39 (best id_loss=4.4995, later epochs regressed),
+# so the reproducible run stops at epoch 39 and uses checkpoint_39.
+EPOCHS: 40
+SCHEDULER_MILESTONES: [30]
+LR_WARMUP_EPOCHS: 1
+SAVE_CHECKPOINT_PER_EPOCH: 8
+MULTI_LAST_CHECKPOINTS: 0
+
+# Keep automatic early stop off; saturation was measured from the full epoch log
+# and encoded above as the planned epoch count.
+EARLY_STOP: False
+
+# Explicitly present for `-u MAX_TRAIN_STEPS=...` preflight overrides. The real
+# training run keeps this empty.
+MAX_TRAIN_STEPS:
+
+OUTPUTS_DIR: ./outputs/tracklet_pseudomot_5fps_id16
+EXP_NAME: tracklet_pseudomot_5fps_id16
