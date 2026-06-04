@@ -88,10 +88,18 @@ infer-tracklet-full MAX="0" DTYPE="fp32":
         --output-mot "outputs/tracklet_pseudomot_full/infer/tracks_mot.txt" \
         --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
 
-# Render tracking JSON onto the source frames -> annotated frames (+ optional mp4). MAX=0 = all.
-visualize-tracklet-full MAX="0":
+# Render tracking JSON -> annotated frames + mp4. MAX=0 = all, FPS default 3.
+visualize-tracklet-full MAX="0" FPS="3":
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/visualize_tracks.py \
         --tracks-json "{{tracklet_infer_json}}" --image-dir "{{tracklet_seq_images}}" \
         --output-dir "outputs/tracklet_pseudomot_full/infer/viz" \
-        --output-video "outputs/tracklet_pseudomot_full/infer/tracks.mp4" --fps 15 --show-score \
+        --output-video "outputs/tracklet_pseudomot_full/infer/tracks.mp4" --fps "{{FPS}}" --show-score \
+        --max-frames "{{MAX}}"
+
+# Render tracking JSON -> mp4 ONLY (no per-frame dump, saves disk). FPS default 3, MAX=0 = all.
+video-tracklet-full FPS="3" MAX="0":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/visualize_tracks.py \
+        --tracks-json "{{tracklet_infer_json}}" --image-dir "{{tracklet_seq_images}}" \
+        --output-dir "" \
+        --output-video "outputs/tracklet_pseudomot_full/infer/tracks.mp4" --fps "{{FPS}}" --show-score \
         --max-frames "{{MAX}}"
