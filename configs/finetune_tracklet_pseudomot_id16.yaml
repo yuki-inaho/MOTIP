@@ -31,6 +31,12 @@ RESUME_MODEL:
 ID_LOSS_WEIGHT: 5.0
 AUG_TRAJECTORY_SWITCH_PROB: 0.7
 
+# OOM fix: SL=16 x AUG_NUM_GROUPS=6 overflows L4 23GB in the ID decoder cross-attn
+# (peaked 18.9GB then OOM on a 2.4GB spike). Halve the trajectory-aug groups 6->3
+# (cuts ID-decoder memory ~half and speeds up steps). Also launch with
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.
+AUG_NUM_GROUPS: 3
+
 # ~5 h on L4 (5 x ~1 h). No MAX_TRAIN_STEPS (real epochs). early-stop inherited.
 EPOCHS: 5
 
