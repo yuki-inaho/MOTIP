@@ -16,6 +16,13 @@ def runtime_option():
     parser.add_argument("--config-path", type=str, default="./configs/r50_deformable_detr_motip_dancetrack.yaml")
     parser.add_argument("--super-config-path", type=str)
 
+    # Generic config overrides: -u KEY=VALUE [KEY=VALUE ...] (values parsed as YAML).
+    parser.add_argument(
+        "-u", "--update", nargs="+", default=None, metavar="KEY=VALUE",
+        help="Generic config overrides, e.g. -u EPOCHS=3 AMP_DTYPE=fp16. "
+             "Values are parsed as YAML; unknown keys raise (no silent fallback).",
+    )
+
     # About system.
     # parser.add_argument("--device", type=str, help="Device.")
     parser.add_argument("--num-workers", type=int, help="Number of workers.")

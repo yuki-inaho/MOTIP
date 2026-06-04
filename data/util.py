@@ -69,6 +69,20 @@ def collate_fn(batch):
     )
     # Above is prepared for DETR.
     # Below is prepared for MOTIP, pre-padding the annotations:
+    # Precondition guard (no silent fallback): every frame must already carry the
+    # trajectory/unknown ID annotations produced by the transform pipeline
+    # (GenerateIDLabels / TurnIntoTrajectoryAndUnknown). A missing key here would
+    # otherwise surface as an opaque bare KeyError deep inside the padding loop.
+    for b, clip in enumerate(annotations):
+        for t, frame_ann in enumerate(clip):
+            if "trajectory_id_labels" not in frame_ann:
+                raise KeyError(
+                    f"collate_fn precondition failed: annotation[batch={b}][frame={t}] is "
+                    f"missing 'trajectory_id_labels'. This key is produced by the transform "
+                    f"pipeline (data/transforms.py: GenerateIDLabels / "
+                    f"TurnIntoTrajectoryAndUnknown); ensure the dataset was built with "
+                    f"build_transforms and that no transform dropped it."
+                )
     max_N = max(annotation[0]["trajectory_id_labels"].shape[-1] for annotation in annotations)
     # Padding the ID annotations:
     for b in range(len(annotations)):

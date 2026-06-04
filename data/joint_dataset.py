@@ -15,6 +15,11 @@ from .bft import BFT
 from .pseudo_mot import PseudoMOT
 
 
+# Dataset registry (mini-registry): maps a dataset name (as used in the config's
+# DATASETS list) to its loader class. To add a new dataset, implement its loader
+# (subclassing OneDataset) and register it here under the name the config uses.
+# JointDataset resolves DATASETS entries against this mapping; an unknown name
+# raises AttributeError (no silent fallback).
 dataset_classes = {
     "DanceTrack": DanceTrack,
     "SportsMOT": SportsMOT,

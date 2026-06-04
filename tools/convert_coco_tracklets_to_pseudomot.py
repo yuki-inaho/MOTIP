@@ -88,6 +88,8 @@ def convert_coco_tracklets_to_pseudomot(
 
     rows: list[tuple[int, int, float, float, float, float, float, int, float]] = []
     track_ids: set[int] = set()
+    num_input_annotations = len(data["annotations"])
+    num_skipped_degenerate = 0      # degenerate bboxes (w<=0 or h<=0); counted, not silently dropped.
     for annotation in data["annotations"]:
         image_id = annotation["image_id"]
         if image_id not in image_by_id:
@@ -99,6 +101,7 @@ def convert_coco_tracklets_to_pseudomot(
             raise ValueError(f"annotation id={annotation.get('id')} has no attributes.score")
         x, y, w, h = [float(v) for v in annotation["bbox"]]
         if w <= 0 or h <= 0:
+            num_skipped_degenerate += 1
             continue
         track_id = int(attributes["track_id"])
         track_ids.add(track_id)
@@ -142,6 +145,8 @@ def convert_coco_tracklets_to_pseudomot(
         "sequence_name": sequence_name,
         "split": split,
         "num_frames": len(images),
+        "num_input_annotations": num_input_annotations,
+        "num_skipped_degenerate": num_skipped_degenerate,
         "num_objects": len(rows),
         "num_tracks": len(track_ids),
         "min_frame": rows[0][0] if rows else None,

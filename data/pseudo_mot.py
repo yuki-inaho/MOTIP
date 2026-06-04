@@ -37,7 +37,14 @@ class PseudoMOT(OneDataset):
 
     def _get_sequence_names(self):
         split_dir = os.path.join(self.data_dir, self.split)
-        return sorted(os.listdir(split_dir)) if os.path.isdir(split_dir) else []
+        if not os.path.isdir(split_dir):
+            return []
+        # Only directories are sequences; stray files (e.g. README.txt, .DS_Store)
+        # must be ignored, not treated as sequences. Sorted order is preserved.
+        return sorted(
+            name for name in os.listdir(split_dir)
+            if os.path.isdir(os.path.join(split_dir, name))
+        )
 
     def _get_sequence_infos(self):
         sequence_infos = {}

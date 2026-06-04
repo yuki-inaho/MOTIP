@@ -139,7 +139,7 @@ def load_detr_pretrain(model: nn.Module, pretrain_path: str, num_classes: int | 
     return
 
 
-def save_checkpoint(model, path, states: dict, optimizer, scheduler, only_detr: bool = False):
+def save_checkpoint(model, path, states: dict, optimizer, scheduler, only_detr: bool = False, ema=None):
     if is_main_process():   # only save the model in the main process.
         model = get_model(model)
         if only_detr:
@@ -150,6 +150,8 @@ def save_checkpoint(model, path, states: dict, optimizer, scheduler, only_detr: 
             "scheduler": scheduler.state_dict() if scheduler is not None else None,
             "states": states,
         }
+        if ema is not None:     # store the EMA weights alongside the online weights.
+            save_state["ema"] = ema.state_dict()
         torch.save(save_state, path)
     return
 

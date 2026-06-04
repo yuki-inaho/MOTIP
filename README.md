@@ -51,6 +51,43 @@
 - See [MISCELLANEOUS.md](./docs/MISCELLANEOUS.md) for other miscellaneous settings unrelated to the model structure, such as logging.
 - See [TUTORIAL.md](./docs/TUTORIAL.md) to understand and better develop our models.
 
+## :recycle: Reproducible local environment (uv)
+
+This local fork is managed with [uv](https://docs.astral.sh/uv/) against a pinned
+`uv.lock` (CUDA wheels via an explicit index in `pyproject.toml`). For
+reproducible runs:
+
+```bash
+export UV_PROJECT_ENVIRONMENT=/home/kasm-user/Desktop/MOTIP/.venv
+
+# 1. Reproduce the exact locked dependency set (no implicit re-resolution):
+uv sync --frozen
+
+# 2. Rebuild the local CUDA op (NOT a PyPI/locked dependency, so `--frozen`
+#    removes it; it must be rebuilt after every `uv sync --frozen`):
+just build-ops
+
+# 3. Run without re-resolving the lock (avoids accidental version drift):
+uv run --no-sync python train.py --config-path <config> [-u KEY=VALUE ...]
+```
+
+Notes:
+
+- **`uv sync --frozen`** installs exactly what `uv.lock` records and fails (rather
+  than silently re-resolving) if `pyproject.toml` and `uv.lock` disagree. After
+  adding a dependency, re-lock first (`uv add <pkg>` or `uv lock`) and only then
+  use `--frozen`.
+- **`just build-ops`** is required after `uv sync --frozen`: the
+  `MultiScaleDeformableAttention` op is built from `models/ops` (not pip-installed),
+  so a frozen sync uninstalls it. Rebuild it before training/inference.
+- **`uv run --no-sync`** runs commands against the current `.venv` without touching
+  the lock — use it for all training/eval to keep the environment frozen.
+- **Seeding is rank-aware**: `--seed` (config `SEED`) is offset by the distributed
+  rank in `utils/misc.py:set_seed` (`seed = seed + distributed_rank()`), so each
+  process is independently and reproducibly seeded.
+- **Generic overrides**: `-u KEY=VALUE` (YAML-typed) overrides any existing config
+  key after typed flags; unknown keys fail loudly (no silent fallback).
+
 ## :bouquet: Acknowledgements
 
 This project is built upon [Deformable DETR](https://github.com/fundamentalvision/Deformable-DETR), [MOTR](https://github.com/megvii-research/MOTR), [TrackEval](https://github.com/JonathonLuiten/TrackEval). Thanks to the contributors of these great codebases.

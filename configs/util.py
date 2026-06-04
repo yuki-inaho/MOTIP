@@ -1,6 +1,10 @@
 # Copyright (c) Ruopeng Gao. All Rights Reserved.
 
 import argparse
+import warnings
+
+import yaml
+
 from utils.misc import yaml_to_dict
 
 
@@ -34,6 +38,57 @@ def update_config_with_kv(config: dict, k: str, v) -> [bool, dict]:
     return hit, config
 
 
+def _set_existing_key(config: dict, key: str, value) -> bool:
+    """Set ``key`` (matched case-insensitively, possibly nested) to ``value``.
+
+    Returns True if a matching key existed and was updated, False otherwise.
+    Does NOT create new keys (no silent fallback on typos).
+    """
+    target = key.upper()
+    for config_k in config.keys():
+        if config_k == target:
+            config[config_k] = value
+            return True
+    for config_k in config.keys():
+        if isinstance(config[config_k], dict):
+            if _set_existing_key(config[config_k], key, value):
+                return True
+    return False
+
+
+def apply_cli_updates(config: dict, updates: list[str] | None) -> dict:
+    """Apply generic ``KEY=VALUE`` overrides to ``config`` (in place).
+
+    Each update is ``KEY=VALUE`` where VALUE is parsed as YAML
+    (``yaml.safe_load``), so ints/floats/bools/lists/strings keep their types.
+    The KEY is matched case-insensitively against existing (possibly nested)
+    config keys. Unknown keys are NOT silently ignored: a KeyError is raised
+    (no silent fallback on typos / stale keys).
+
+    Args:
+        config: The config dict to mutate.
+        updates: List like ``["EPOCHS=3", "AMP_DTYPE=fp16"]`` (or None).
+
+    Returns:
+        The same config dict, updated.
+    """
+    if not updates:
+        return config
+    for item in updates:
+        if "=" not in item:
+            raise ValueError(f"Invalid -u override '{item}'; expected KEY=VALUE.")
+        key, raw_value = item.split("=", 1)
+        key = key.strip()
+        value = yaml.safe_load(raw_value)   # YAML typing: int/float/bool/list/str
+        if not _set_existing_key(config, key, value):
+            raise KeyError(
+                f"Unknown -u override key '{key}'; it does not exist in the config "
+                f"(no silent fallback). Check the spelling against the .yaml config."
+            )
+        warnings.warn(f"Config overridden via -u: {key.upper()} = {value!r}", stacklevel=2)
+    return config
+
+
 def update_config(config: dict, option: argparse.Namespace) -> dict:
     """
     Update current config with an option parser.
@@ -49,8 +104,10 @@ def update_config(config: dict, option: argparse.Namespace) -> dict:
     # if is_unique(config)[0] is False:
     #     raise RuntimeError("Config's key is not unique, Please check the config file.")
 
+    # "update" is the generic -u override; it is applied separately via
+    # apply_cli_updates (not a typed config key), so skip it here.
     for option_k, option_v in vars(option).items():
-        if option_k != "config_path" and option_v is not None:  # except --config-path
+        if option_k not in ("config_path", "update") and option_v is not None:  # except --config-path / -u
             # v2.0 remove hierarchical config setting, using plain config setting.
             # hit, config = update_config_with_kv(config=config, k=option_k, v=option_v)
             config_k = option_k.upper()

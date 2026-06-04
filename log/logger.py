@@ -57,8 +57,10 @@ class Logger:
             exp_project: str | None = None,
             exp_group: str | None = None,
             exp_name: str | None = None,
+            tensorboard: bool = False,        # second logging layer, disabled by default
     ):
         self.logdir = logdir
+        self.tb_writer = None       # SummaryWriter, only on the main process when enabled
         if is_main_process():
             os.makedirs(self.logdir, exist_ok=True)
             if use_wandb:       # init wandb
@@ -79,8 +81,24 @@ class Logger:
                 )   # for more details, see https://docs.wandb.ai/ref/python/init
             else:
                 self.wandb = None
+            if tensorboard:     # second logging layer; log.txt / wandb are untouched.
+                from torch.utils.tensorboard import SummaryWriter
+                self.tb_writer = SummaryWriter(log_dir=os.path.join(self.logdir, "tb"))
         else:
             self.wandb = None
+        return
+
+    def tb_scalar(self, tag: str, value, global_step: int):
+        """Write one scalar to TensorBoard (no-op when disabled / non-main)."""
+        if self.tb_writer is not None:
+            self.tb_writer.add_scalar(tag, value, global_step)
+        return
+
+    def close(self):
+        """Flush and close the TensorBoard writer (safe to call multiple times)."""
+        if self.tb_writer is not None:
+            self.tb_writer.close()
+            self.tb_writer = None
         return
 
     def config(self, config: dict):
@@ -228,7 +246,7 @@ class Logger:
                                            global_step=global_step, prefix=prefix)
                 if x_axis_step is not None:
                     if x_axis_name is None:
-                        raise RuntimeError(f"If you set x_axis_step, you should also set a valid x_axis_name.")
+                        raise RuntimeError("If you set x_axis_step, you should also set a valid x_axis_name.")
                     self.wandb_log(     # see https://github.com/wandb/wandb/issues/410 for more details.
                         data={x_axis_name: x_axis_step},
                         step=global_step

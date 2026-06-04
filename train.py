@@ -17,7 +17,7 @@ from models.motip import build as build_motip
 from models.motip.id_criterion import build as build_id_criterion
 from runtime_option import runtime_option
 from utils.misc import yaml_to_dict, set_seed
-from configs.util import load_super_config, update_config
+from configs.util import load_super_config, update_config, apply_cli_updates
 from log.logger import Logger
 from data import build_dataset
 from data.naive_sampler import NaiveSampler
@@ -25,6 +25,7 @@ from data.util import collate_fn
 from log.log import TPS, Metrics
 from models.misc import load_detr_pretrain, save_checkpoint, load_checkpoint
 from models.misc import get_model
+from models.ema import ModelEMA
 from utils.nested_tensor import NestedTensor
 from submit_and_evaluate import submit_and_evaluate_one_model
 
@@ -36,7 +37,10 @@ def train_engine(config: dict):
         else os.path.join("./outputs/", config["EXP_NAME"])
 
     # Init Accelerator at beginning:
-    accelerator = Accelerator()
+    # AMP via Accelerate's mixed_precision (DEIM's raw GradScaler is intentionally
+    # NOT ported; the existing accelerator.autocast()/backward() follow this).
+    # AMP_DTYPE in {"no","fp16","bf16"}; default "no" == previous Accelerator() behaviour.
+    accelerator = Accelerator(mixed_precision=config.get("AMP_DTYPE", "no"))
     state = PartialState()
     # Also, we set the seed:
     set_seed(config["SEED"])
@@ -52,6 +56,7 @@ def train_engine(config: dict):
         exp_project=config["EXP_PROJECT"],
         exp_group=config["EXP_GROUP"],
         exp_name=config["EXP_NAME"],
+        tensorboard=config.get("TENSORBOARD", False),
     )
     logger.info(f"We init the logger at {logger.logdir}.")
     if config["USE_WANDB"] is False:
@@ -156,13 +161,39 @@ def train_engine(config: dict):
         # device_placement=[False]        # whether to place the data on the device
     )
 
+    # EMA (porting item 6): keep an exponential moving average of the weights.
+    # Disabled by default (EMA_ENABLED=False) -> not created, behaviour unchanged.
+    # The mirror is built from the *unwrapped* model (Accelerate-correct).
+    ema = None
+    if config.get("EMA_ENABLED", False):
+        ema = ModelEMA(
+            model=accelerator.unwrap_model(model),
+            decay=config.get("EMA_DECAY", 0.9999),
+            warmups=config.get("EMA_WARMUPS", 1000),
+        )
+        logger.info(log=f"EMA enabled (decay={ema.decay}, warmups={ema.warmups}).")
+
+    # Config-driven early stopping (porting item 4). Disabled by default ->
+    # all EPOCHS run (non-destructive). Monitored metric = epoch-average loss.
+    early_stop_enabled = config.get("EARLY_STOP", False)
+    early_stop_patience = config.get("EARLY_STOP_PATIENCE", 10)
+    early_stop_min_delta = config.get("EARLY_STOP_MIN_DELTA", 0.0)
+    early_stop_start_epoch = config.get("EARLY_STOP_START_EPOCH", 0)
+    loss_history: list[float] = []
+    if early_stop_enabled:
+        logger.info(
+            log=f"Early stopping enabled (patience={early_stop_patience}, "
+                f"min_delta={early_stop_min_delta}, start_epoch={early_stop_start_epoch}, "
+                f"metric=epoch-average loss)."
+        )
+
     for epoch in range(train_states["start_epoch"], config["EPOCHS"]):
         logger.info(log=f"Start training epoch {epoch}.")
         epoch_start_timestamp = TPS.timestamp()
         # Prepare the sampler for the current epoch:
         train_sampler.prepare_for_epoch(epoch=epoch)
         # Train one epoch:
-        train_metrics = train_one_epoch(
+        train_metrics, early_stopped = train_one_epoch(
             accelerator=accelerator,
             logger=logger,
             states=train_states,
@@ -172,6 +203,7 @@ def train_engine(config: dict):
             detr_criterion=detr_criterion,
             id_criterion=id_criterion,
             optimizer=optimizer,
+            ema=ema,
             only_detr=only_detr,
             lr_warmup_epochs=config["LR_WARMUP_EPOCHS"],
             lr_warmup_tgt_lr=config["LR"],
@@ -205,6 +237,35 @@ def train_engine(config: dict):
             x_axis_step=epoch,
             x_axis_name="epoch",
         )
+        # Second logging layer (TensorBoard, epoch granularity). No-op when disabled.
+        for _name, _value in train_metrics.metrics.items():
+            logger.tb_scalar(f"epoch/{_name}", _value.global_average, epoch)
+
+        # Config-driven early stopping (porting item 4): monitor epoch-average loss.
+        # NaN/inf loss is a hard failure, handled separately from early-stop (no
+        # silent fallback): we do not quietly continue training on a broken loss.
+        train_metrics["loss"].sync()
+        epoch_loss = train_metrics["loss"].global_average
+        if not math.isfinite(epoch_loss):
+            raise RuntimeError(
+                f"Non-finite epoch-average loss ({epoch_loss}) at epoch {epoch}; "
+                f"aborting (no silent fallback)."
+            )
+        loss_history.append(epoch_loss)
+        if early_stop_enabled and should_early_stop(
+            history=loss_history,
+            patience=early_stop_patience,
+            min_delta=early_stop_min_delta,
+            start_epoch=early_stop_start_epoch,
+        ):
+            # Merge into the single stop path (no second break): the existing
+            # `if early_stopped: break` below performs the actual stop.
+            logger.info(
+                log=f"Early stopping triggered at epoch {epoch} "
+                    f"(no improvement in epoch loss for {early_stop_patience} epochs, "
+                    f"best={min(loss_history[early_stop_start_epoch:]):.4f})."
+            )
+            early_stopped = True
 
         # Save checkpoint:
         if (epoch + 1) % config["SAVE_CHECKPOINT_PER_EPOCH"] == 0:
@@ -215,6 +276,7 @@ def train_engine(config: dict):
                 optimizer=optimizer,
                 scheduler=scheduler,
                 only_detr=only_detr,
+                ema=ema,
             )
             if config["INFERENCE_DATASET"] is not None:
                 assert config["INFERENCE_SPLIT"] is not None, "Please set the INFERENCE_SPLIT for inference."
@@ -255,7 +317,14 @@ def train_engine(config: dict):
         logger.success(log=f"Finish training epoch {epoch}.")
         # Prepare for next step:
         scheduler.step()
-    pass
+        # Single stop path: train_one_epoch reports when MAX_TRAIN_STEPS was
+        # reached; the epoch loop must stop here (Bug1: previously the inner
+        # break did not stop the outer epoch loop).
+        if early_stopped:
+            logger.info(log=f"Stop the epoch loop early at epoch {epoch} (global_step={train_states['global_step']}).")
+            break
+    # Flush and close the TensorBoard writer (no-op when disabled).
+    logger.close()
 
 
 def train_one_epoch(
@@ -282,12 +351,14 @@ def train_one_epoch(
         use_accelerate_clip_norm: bool = True,
         logging_interval: int = 20,
         max_train_steps: int | None = None,
+        ema: ModelEMA | None = None,
         # For multi last checkpoints:
         outputs_dir: str = None,
         is_last_epochs: bool = False,
         multi_last_checkpoints: int = 0,
 ):
     current_last_checkpoint_idx = 0
+    early_stopped = False   # set True when MAX_TRAIN_STEPS is reached, so the caller can stop the epoch loop.
 
     model.train()
     tps = TPS()     # time per step
@@ -452,8 +523,13 @@ def train_one_epoch(
             if (step + 1) % accumulate_steps == 0:
                 if use_accelerate_clip_norm:
                     if separate_clip_norm:
-                        detr_grad_norm = accelerator.clip_grad_norm_(detr_params, max_norm=max_clip_norm)
-                        other_grad_norm = accelerator.clip_grad_norm_(other_params, max_norm=max_clip_norm)
+                        # Under AMP, accelerator.clip_grad_norm_ unscales the gradients
+                        # internally; calling it twice on the same optimizer in one step
+                        # raises "unscale_() has already been called". So unscale once
+                        # (no-op when AMP is off) and clip each group with torch's clip.
+                        accelerator.unscale_gradients()
+                        detr_grad_norm = torch.nn.utils.clip_grad_norm_(detr_params, max_clip_norm)
+                        other_grad_norm = torch.nn.utils.clip_grad_norm_(other_params, max_clip_norm)
                     else:
                         detr_grad_norm = other_grad_norm = accelerator.clip_grad_norm_(model.parameters(), max_norm=max_clip_norm)
                 else:
@@ -469,6 +545,9 @@ def train_one_epoch(
                 metrics.update(name="other_grad_norm", value=other_grad_norm.item())
                 optimizer.step()
                 optimizer.zero_grad()
+                # EMA update after each real optimizer step, from the unwrapped model.
+                if ema is not None:
+                    ema.update(accelerator.unwrap_model(model))
 
         # Logging:
         tps.update(tps=tps.timestamp() - step_timestamp)
@@ -501,6 +580,16 @@ def train_one_epoch(
                 metrics=metrics,
                 global_step=states["global_step"],
             )
+            # Second logging layer (TensorBoard, step granularity). No-op when
+            # disabled; log.txt / wandb above are untouched.
+            _gs = states["global_step"]
+            logger.tb_scalar("Loss/total", metrics["loss"].average, _gs)
+            logger.tb_scalar("Lr/pg", _lr, _gs)
+            logger.tb_scalar("Mem/max_cuda_mb", _max_cuda_memory, _gs)
+            for _name, _value in metrics.metrics.items():
+                if _name in ("loss", "lr", "max_cuda_mem(MB)"):
+                    continue        # already logged above under canonical tags
+                logger.tb_scalar(f"Loss/{_name}", _value.average, _gs)
         # For multi last checkpoints:
         if is_last_epochs and multi_last_checkpoints > 0:
             if (step + 1) == int(math.ceil((len(dataloader) / multi_last_checkpoints) * (current_last_checkpoint_idx + 1))):
@@ -513,6 +602,7 @@ def train_one_epoch(
                     optimizer=None,
                     scheduler=None,
                     only_detr=only_detr,
+                    ema=ema,
                 )
                 logger.info(
                     log=f"Save the last checkpoint {current_last_checkpoint_idx} at step {step}."
@@ -520,11 +610,12 @@ def train_one_epoch(
                 current_last_checkpoint_idx += 1
         # Update the counters:
         states["global_step"] += 1
-        if max_train_steps is not None and states["global_step"] >= max_train_steps:
+        if reached_max_train_steps(states["global_step"], max_train_steps):
             logger.info(log=f"Stop training early at global_step={states['global_step']} by MAX_TRAIN_STEPS={max_train_steps}.")
+            early_stopped = True
             break
     states["start_epoch"] += 1
-    return metrics
+    return metrics, early_stopped
 
 
 def get_param_groups(model, config) -> list[dict]:
@@ -565,6 +656,50 @@ def get_param_groups(model, config) -> list[dict]:
         }
     ]
     return param_groups
+
+
+def should_early_stop(history: list[float], patience: int, min_delta: float, start_epoch: int) -> bool:
+    """Pure early-stop judge over a history of monitored values (lower is better).
+
+    Only epochs at index ``>= start_epoch`` are considered. The first considered
+    epoch establishes the baseline ``best`` (never triggers a stop). After that,
+    an epoch counts as an improvement iff ``value < best - min_delta`` (which
+    resets the patience counter); otherwise the non-improving counter grows.
+    Returns True once ``patience`` consecutive non-improving epochs have elapsed.
+
+    Args:
+        history: Monitored value per finished epoch (e.g. epoch-average loss).
+        patience: Allowed consecutive non-improving epochs before stopping.
+        min_delta: Minimum decrease that counts as an improvement.
+        start_epoch: Epochs before this index are ignored for monitoring.
+    """
+    considered = history[start_epoch:]
+    if len(considered) <= 1:
+        return False    # need a baseline plus at least one monitored epoch.
+    best = considered[0]
+    wait = 0
+    for value in considered[1:]:
+        if value < best - min_delta:
+            best = value
+            wait = 0
+        else:
+            wait += 1
+            if wait >= patience:
+                return True
+    return False
+
+
+def reached_max_train_steps(global_step: int, max_train_steps: int | None) -> bool:
+    """Pure predicate for the ``MAX_TRAIN_STEPS`` stop condition.
+
+    Args:
+        global_step: The current global step counter (already incremented).
+        max_train_steps: The configured step cap, or ``None`` for no cap.
+
+    Returns:
+        True when a finite cap is configured and ``global_step`` has reached it.
+    """
+    return max_train_steps is not None and global_step >= max_train_steps
 
 
 def lr_warmup(optimizer, epoch: int, curr_iter: int, tgt_lr: float, warmup_epochs: int, num_iter_per_epoch: int):
@@ -735,6 +870,9 @@ if __name__ == '__main__':
 
     # Combine the config and runtime into config dict:
     cfg = update_config(config=cfg, option=opt)
+    # Apply generic -u KEY=VALUE overrides on top of typed flags (YAML-typed,
+    # unknown keys raise -> no silent fallback).
+    cfg = apply_cli_updates(cfg, opt.update)
 
     # Call the "train_engine" function:
     train_engine(config=cfg)

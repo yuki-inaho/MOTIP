@@ -4,11 +4,28 @@ tracklet_coco := "/home/kasm-user/Desktop/tomato_tracking_deim_mot/outputs/nyx66
 tracklet_images := "/home/kasm-user/Desktop/NYX660_2025_12_01_17_33_27_0135/Color"
 tracklet_dataset := "datasets/TomatoTrackletMOT"
 tracklet_config := "configs/train_tracklet_pseudomot_smoke.yaml"
+tracklet_full_config := "configs/train_tracklet_pseudomot_full.yaml"
 motip_dancetrack_ckpt := "outputs/r50_deformable_detr_motip_dancetrack/r50_deformable_detr_motip_dancetrack.pth"
 tracklet_detr_pretrain := "pretrains/r50_deformable_detr_coco_dancetrack.pth"
 
 sync:
     UV_PROJECT_ENVIRONMENT="{{venv}}" uv sync
+
+# Reproducible install from the pinned lock (no implicit re-resolution).
+# NOTE: this removes the locally-built MultiScaleDeformableAttention op, so run
+# `just build-ops` afterwards (see `just repro-doc`).
+sync-frozen:
+    UV_PROJECT_ENVIRONMENT="{{venv}}" uv sync --frozen
+
+# Print the reproducible-environment regimen (uv --frozen / --no-sync / seed).
+repro-doc:
+    @echo "Reproducible environment regimen (see README.md > Reproducible local environment):"
+    @echo "  1) export UV_PROJECT_ENVIRONMENT={{venv}}"
+    @echo "  2) just sync-frozen     # uv sync --frozen (exact locked deps; fails on lock mismatch)"
+    @echo "  3) just build-ops       # rebuild MultiScaleDeformableAttention op (removed by --frozen)"
+    @echo "  4) uv run --no-sync ... # run without re-resolving the lock"
+    @echo "Seeding is rank-aware: SEED is offset by distributed_rank() in utils/misc.py:set_seed."
+    @echo "Generic overrides: -u KEY=VALUE (YAML-typed); unknown keys fail loudly (no silent fallback)."
 
 env-info:
     UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python -c 'import sys, torch; print("python", sys.version); print("torch", torch.__version__); print("cuda_available", torch.cuda.is_available()); print("cuda_runtime", torch.version.cuda if torch.cuda.is_available() else "n/a"); print("device", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "n/a"); print("capability", torch.cuda.get_device_capability(0) if torch.cuda.is_available() else "n/a")'
@@ -45,3 +62,15 @@ loader-tracklet-smoke:
 
 train-tracklet-smoke:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python train.py --config-path "{{tracklet_config}}"
+
+# Show the resolved key values for the FULL training config (no MAX_TRAIN_STEPS).
+config-tracklet-full:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_full_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["DATASETS", "DATASET_SPLITS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "EPOCHS", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "TENSORBOARD", "EARLY_STOP", "USE_DECODER_CHECKPOINT", "INFERENCE_DATASET", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
+# Launch the FULL tracklet training (background recommended; started in B6, not here).
+train-tracklet-full:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_full_config}}"
+
+# TensorBoard for the full run (point --logdir at the run's train/tb directory).
+tb:
+    UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync tensorboard --logdir outputs/tracklet_pseudomot_full/train/tb

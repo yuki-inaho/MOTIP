@@ -27,3 +27,18 @@ models/ops/*.egg-info/
 pretrains/
 outputs/
 datasets/
+
+# Experiment logs / TensorBoard (also covered by outputs/, kept explicit)
+runs/
+wandb/
+events.out.tfevents.*
+*.tfevents.*
+NaN.pth
+
+# OS / editor / notebooks
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.ipynb_checkpoints/

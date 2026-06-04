@@ -1,0 +1,82 @@
+SUPER_CONFIG_PATH: ./configs/r50_deformable_detr_motip_dancetrack.yaml
+
+# Dataset (tomato tracklet pseudo-MOT, single train sequence: 1219 frames):
+DATA_ROOT: ./datasets/
+DATASETS: [PseudoMOT]
+DATASET_SPLITS: [train]
+PSEUDOMOT_SUB_DIR: TomatoTrackletMOT
+PSEUDOMOT_LABEL_FILE_NAME: gt.txt
+PSEUDOMOT_ALLOW_EMPTY_FRAMES: False
+
+# Sampling (step 16 measured & VRAM-constrained).
+# Dataset facts: max 63 obj/frame, 1367 unique tracks over 1219 frames.
+# Clip-internal max-unique tracks (exhaustive over all sampler begins/intervals):
+#   SAMPLE_LENGTHS=[30],iv<=4 -> 231   SAMPLE_LENGTHS=[16],iv<=4 -> 164
+#   SAMPLE_LENGTHS=[10],iv<=4 -> 128 (chosen)
+# SAMPLE_LENGTHS=[30] (base) OOMs on L4 23GB; [10] -> ~4.2GB peak (EMA+TB on),
+# ~1.32 s/step steady, ~1210 steps/epoch.
+SAMPLE_STEPS: [0]
+SAMPLE_LENGTHS: [10]
+SAMPLE_INTERVALS: [4]
+LENGTH_PER_ITERATION:
+NUM_WORKERS: 4
+PREFETCH_FACTOR: 2
+BATCH_SIZE: 1
+
+# ID vocabulary MUST be >= clip-internal max-unique tracks (128) or
+# data/transforms.py:411-418 silently truncates via randperm. 160 = 128 + margin.
+NUM_ID_VOCABULARY: 160
+NUM_TRAINING_IDS: 160
+
+# OOM mitigations (step 16, applied in Plan order so SAMPLE_LENGTHS=[30] base
+# config which OOMs becomes feasible on a single L4 23GB):
+#   decoder gradient checkpointing + reduced resolution + fewer checkpoint frames.
+USE_DECODER_CHECKPOINT: True
+AUG_RESIZE_SCALES: [480, 512, 544, 576, 608, 640]
+AUG_MAX_SIZE: 1024
+DETR_NUM_CHECKPOINT_FRAMES: 2
+
+# Full training: real epochs, NO MAX_TRAIN_STEPS. EPOCHS=8 ~= 3.6 h worst case on
+# L4 (1210 steps/epoch * 1.32 s); early stopping usually ends it sooner.
+EPOCHS: 8
+SCHEDULER_MILESTONES: [5, 7]
+LR_WARMUP_EPOCHS: 1
+SAVE_CHECKPOINT_PER_EPOCH: 1
+MULTI_LAST_CHECKPOINTS: 0
+
+# Train both DETR and the MOTIP ID path.
+ONLY_DETR: False
+
+# --- Experiment-management features (ported in B4a/B4b). All keys explicit so
+# --- they exist in the config (required for -u overrides; not just config.get). ---
+# (3) AMP via Accelerate mixed_precision.
+# bf16 (NOT fp16): the DETR backbone gradients overflow fp16 range, which makes
+# detr_grad_norm = nan and thrashes the GradScaler (pre-flight, B6). bf16 has the
+# fp32 exponent range, so grads stay finite (detr_grad_norm ~63, 0 non-finite TB
+# scalars) at the same VRAM/speed. L4 (sm_89) supports bf16 natively.
+AMP_DTYPE: bf16
+# (6) EMA (Accelerate-friendly, unwrap_model based):
+EMA_ENABLED: True
+EMA_DECAY: 0.9999
+EMA_WARMUPS: 1000
+# (2) TensorBoard second logging layer:
+TENSORBOARD: True
+# (1)(4) Config-driven early stopping (monitor = epoch-average loss):
+EARLY_STOP: True
+EARLY_STOP_PATIENCE: 3
+EARLY_STOP_MIN_DELTA: 0.0
+EARLY_STOP_START_EPOCH: 2
+
+# Pretrain must exist (prepared by just prepare-tracklet-pretrain).
+DETR_PRETRAIN: ./pretrains/r50_deformable_detr_coco_dancetrack.pth
+RESUME_MODEL:
+
+# Disable during-train eval: the tomato dataset is a single train sequence with
+# no validation GT, so HOTA/MOTA cannot be computed (no silent fake eval).
+INFERENCE_DATASET:
+INFERENCE_SPLIT:
+
+# Outputs:
+OUTPUTS_DIR: ./outputs/tracklet_pseudomot_full
+EXP_NAME: tracklet_pseudomot_full
+USE_WANDB: False
