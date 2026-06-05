@@ -4,9 +4,11 @@ tracklet_coco := "/home/kasm-user/Desktop/tomato_tracking_deim_mot/outputs/nyx66
 tracklet_images := "/home/kasm-user/Desktop/NYX660_2025_12_01_17_33_27_0135/Color"
 tracklet_dataset := "datasets/TomatoTrackletMOT"
 tracklet_5fps_dataset := "datasets/TomatoTrackletMOT_5fps"
+tracklet_retrack_optuna_dataset := "datasets/TomatoTrackletMOT_retrack_optuna"
 tracklet_config := "configs/train_tracklet_pseudomot_smoke.yaml"
 tracklet_full_config := "configs/train_tracklet_pseudomot_full.yaml"
 tracklet_5fps_config := "configs/finetune_tracklet_pseudomot_5fps_id16.yaml"
+tracklet_retrack_optuna_config := "configs/finetune_tracklet_pseudomot_retrack_optuna.yaml"
 motip_dancetrack_ckpt := "outputs/r50_deformable_detr_motip_dancetrack/r50_deformable_detr_motip_dancetrack.pth"
 tracklet_detr_pretrain := "pretrains/r50_deformable_detr_coco_dancetrack.pth"
 
@@ -59,6 +61,13 @@ build-tracklet-pseudomot-5fps:
         --output-root "{{tracklet_5fps_dataset}}" --sequence-name nyx660_jun04_stride6 \
         --split train --frame-rate 5 --frame-stride 6
 
+build-tracklet-pseudomot-retrack-optuna:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/convert_track_json_to_pseudomot.py \
+        --track-json "outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/tracks.json" \
+        --image-dir "{{tracklet_seq_images}}" \
+        --output-root "{{tracklet_retrack_optuna_dataset}}" --sequence-name nyx660_jun04_retrack_optuna \
+        --split train --frame-rate 30
+
 prepare-tracklet-pretrain:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python tools/extract_detr_pretrain.py --source "{{motip_dancetrack_ckpt}}" --output "{{tracklet_detr_pretrain}}"
 
@@ -71,6 +80,9 @@ loader-tracklet-smoke:
 loader-tracklet-5fps:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from data.joint_dataset import JointDataset; ds = JointDataset(data_root="./datasets", datasets=["PseudoMOT"], splits=["train"], pseudomot_sub_dir="TomatoTrackletMOT_5fps"); ds.set_sample_details(sample_length=16, sample_interval=1); print(ds.statistics()); print("samples", len(ds))'
 
+loader-tracklet-retrack-optuna:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from data.joint_dataset import JointDataset; ds = JointDataset(data_root="./datasets", datasets=["PseudoMOT"], splits=["train"], pseudomot_sub_dir="TomatoTrackletMOT_retrack_optuna"); ds.set_sample_details(sample_length=8, sample_interval=1); print(ds.statistics()); print("samples", len(ds))'
+
 train-tracklet-smoke:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python train.py --config-path "{{tracklet_config}}"
 
@@ -82,6 +94,10 @@ config-tracklet-full:
 config-tracklet-5fps:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_5fps_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["DATASETS", "DATASET_SPLITS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "EPOCHS", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "TENSORBOARD", "EARLY_STOP", "AUG_NUM_GROUPS", "ID_LOSS_WEIGHT", "DETR_PRETRAIN", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
 
+# Show resolved key values for the Optuna-retracked pseudo-label fine-tune config.
+config-tracklet-retrack-optuna:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_retrack_optuna_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "RESUME_MODEL", "RESUME_OPTIMIZER", "RESUME_SCHEDULER", "EPOCHS", "SCHEDULER_MILESTONES", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "AUG_NUM_GROUPS", "ID_LOSS_WEIGHT", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
 # Launch the FULL tracklet training (background recommended; started in B6, not here).
 train-tracklet-full:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_full_config}}"
@@ -89,6 +105,10 @@ train-tracklet-full:
 # Launch the 5FPS ID fine-tune. Use PYTORCH_CUDA_ALLOC_CONF to reduce allocator fragmentation.
 train-tracklet-5fps:
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_5fps_config}}"
+
+# Fine-tune from checkpoint_39 on Optuna-retracked pseudo labels.
+train-tracklet-retrack-optuna:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_retrack_optuna_config}}"
 
 # TensorBoard for the full run (point --logdir at the run's train/tb directory).
 tb:
@@ -104,6 +124,13 @@ tracklet_5fps_comparison_json := "outputs/tracklet_pseudomot_5fps_id16/infer_30f
 tracklet_5fps_retrack_json := "outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/tracks.json"
 tracklet_5fps_retrack_mot := "outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/tracks_mot.txt"
 tracklet_5fps_retrack_summary := "outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/summary.json"
+tracklet_5fps_optuna_retrack_json := "outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/tracks.json"
+tracklet_5fps_optuna_retrack_mot := "outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/tracks_mot.txt"
+tracklet_5fps_optuna_retrack_summary := "outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/summary.json"
+tracklet_5fps_optuna_study := "outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/optuna_study.json"
+tracklet_retrack_optuna_ft_ckpt := "outputs/tracklet_pseudomot_retrack_optuna_ft/checkpoint_40.pth"
+tracklet_retrack_optuna_ft_infer_json := "outputs/tracklet_pseudomot_retrack_optuna_ft/infer_30fps/tracks.json"
+tracklet_retrack_optuna_ft_comparison_json := "outputs/tracklet_pseudomot_retrack_optuna_ft/infer_30fps/comparison_vs_optuna_retrack.json"
 
 # Run MOTIP tracking inference on the tomato sequence -> JSON (+ MOTChallenge txt). MAX=0 = all frames.
 infer-tracklet-full MAX="0" DTYPE="fp32":
@@ -119,6 +146,14 @@ infer-tracklet-5fps MAX="0" DTYPE="fp32" CKPT=tracklet_5fps_ckpt:
         --config "{{tracklet_5fps_config}}" --checkpoint "{{CKPT}}" --use-ema \
         --image-dir "{{tracklet_seq_images}}" --output-json "{{tracklet_5fps_infer_json}}" \
         --output-mot "outputs/tracklet_pseudomot_5fps_id16/infer_30fps/tracks_mot.txt" \
+        --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
+
+# Run retrack-Optuna pseudo-label fine-tuned checkpoint over the original 30FPS image sequence.
+infer-tracklet-retrack-optuna-ft MAX="0" DTYPE="fp32" CKPT=tracklet_retrack_optuna_ft_ckpt:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/infer_tracklet.py \
+        --config "{{tracklet_retrack_optuna_config}}" --checkpoint "{{CKPT}}" --use-ema \
+        --image-dir "{{tracklet_seq_images}}" --output-json "{{tracklet_retrack_optuna_ft_infer_json}}" \
+        --output-mot "outputs/tracklet_pseudomot_retrack_optuna_ft/infer_30fps/tracks_mot.txt" \
         --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
 
 # Render tracking JSON -> annotated frames + mp4. MAX=0 = all, FPS default 3.
@@ -145,11 +180,25 @@ video-tracklet-5fps FPS="3" MAX="0":
         --output-video "outputs/tracklet_pseudomot_5fps_id16/infer_30fps/tracks.mp4" --fps "{{FPS}}" --show-score \
         --max-frames "{{MAX}}"
 
+# Render retrack-Optuna fine-tuned tracking JSON -> mp4 only.
+video-tracklet-retrack-optuna-ft FPS="3" MAX="0":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/visualize_tracks.py \
+        --tracks-json "{{tracklet_retrack_optuna_ft_infer_json}}" --image-dir "{{tracklet_seq_images}}" \
+        --output-dir "" \
+        --output-video "outputs/tracklet_pseudomot_retrack_optuna_ft/infer_30fps/tracks.mp4" \
+        --fps "{{FPS}}" --show-score --max-frames "{{MAX}}"
+
 # Compare old full-run tracking JSON and new 5FPS fine-tuned tracking JSON.
 compare-tracklet-5fps:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/compare_track_json.py \
         --old-json "{{tracklet_infer_json}}" --new-json "{{tracklet_5fps_infer_json}}" \
         --output-json "{{tracklet_5fps_comparison_json}}"
+
+# Compare Optuna re-tracked pseudo labels and MOTIP output after fine-tuning on those labels.
+compare-tracklet-retrack-optuna-ft:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/compare_track_json.py \
+        --old-json "{{tracklet_5fps_optuna_retrack_json}}" --new-json "{{tracklet_retrack_optuna_ft_infer_json}}" \
+        --output-json "{{tracklet_retrack_optuna_ft_comparison_json}}"
 
 # Re-track frame-level MOTIP bbox detections with a ByteTrack-style IoU tracker.
 # Defaults are tuned for the tomato sequence; outputs are JSON + MOTChallenge txt + summary.
@@ -169,4 +218,22 @@ video-retrack-tracklet-5fps FPS="3" MAX="0":
         --tracks-json "{{tracklet_5fps_retrack_json}}" --image-dir "{{tracklet_seq_images}}" \
         --output-dir "" \
         --output-video "outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/tracks.mp4" \
+        --fps "{{FPS}}" --show-score --max-frames "{{MAX}}"
+
+# Tune re-tracking parameters with Optuna to favor longer tracklets while avoiding over-merge/dropout.
+optuna-retrack-tracklet-5fps TRIALS="80" TIMEOUT="240":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/tune_retrack_detections.py \
+        --input-json "{{tracklet_5fps_infer_json}}" \
+        --study-json "{{tracklet_5fps_optuna_study}}" \
+        --best-output-json "{{tracklet_5fps_optuna_retrack_json}}" \
+        --best-output-mot "{{tracklet_5fps_optuna_retrack_mot}}" \
+        --best-summary-json "{{tracklet_5fps_optuna_retrack_summary}}" \
+        --n-trials "{{TRIALS}}" --timeout "{{TIMEOUT}}"
+
+# Render Optuna-tuned re-tracked bbox IDs -> mp4 only. FPS default 3, MAX=0 = all.
+video-optuna-retrack-tracklet-5fps FPS="3" MAX="0":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/visualize_tracks.py \
+        --tracks-json "{{tracklet_5fps_optuna_retrack_json}}" --image-dir "{{tracklet_seq_images}}" \
+        --output-dir "" \
+        --output-video "outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/tracks.mp4" \
         --fps "{{FPS}}" --show-score --max-frames "{{MAX}}"

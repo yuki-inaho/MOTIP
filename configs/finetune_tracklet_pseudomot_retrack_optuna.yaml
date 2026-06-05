@@ -1,0 +1,45 @@
+# Fine-tune MOTIP on Optuna-tuned post-processed pseudo labels.
+#
+# Source labels:
+#   outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/tracks.json
+# are converted to:
+#   datasets/TomatoTrackletMOT_retrack_optuna
+#
+# This config intentionally keeps NUM_ID_VOCABULARY=224 so the previous
+# checkpoint_39 model can be strict-resumed. A read-only scan of the generated
+# PseudoMOT labels gives max clip-internal unique IDs:
+#   SL=8, interval=1 -> 210
+# so GenerateIDLabels does not truncate (210 <= 224).
+
+SUPER_CONFIG_PATH: ./configs/finetune_tracklet_pseudomot_5fps_id16.yaml
+
+PSEUDOMOT_SUB_DIR: TomatoTrackletMOT_retrack_optuna
+PSEUDOMOT_LABEL_FILE_NAME: gt.txt
+PSEUDOMOT_ALLOW_EMPTY_FRAMES: False
+
+SAMPLE_STEPS: [0]
+SAMPLE_LENGTHS: [8]
+SAMPLE_INTERVALS: [1]
+LENGTH_PER_ITERATION:
+
+NUM_ID_VOCABULARY: 224
+NUM_TRAINING_IDS: 224
+
+# Strict model resume from the 5FPS fine-tuned checkpoint. Optimizer/scheduler
+# are not resumed; scheduler milestones are placed beyond the fine-tune window
+# so the resumed epoch counter does not immediately decay LR.
+RESUME_MODEL: ./outputs/tracklet_pseudomot_5fps_id16/checkpoint_39.pth
+RESUME_OPTIMIZER: False
+RESUME_SCHEDULER: False
+SCHEDULER_MILESTONES: [999]
+
+# checkpoint_39 stores start_epoch=40. EPOCHS=41 runs exactly epoch 40,
+# which was enough to produce checkpoint_40; the loss was already flat, so
+# longer retrack-label fine-tuning is intentionally not the default.
+EPOCHS: 41
+SAVE_CHECKPOINT_PER_EPOCH: 1
+EARLY_STOP: False
+MAX_TRAIN_STEPS:
+
+OUTPUTS_DIR: ./outputs/tracklet_pseudomot_retrack_optuna_ft
+EXP_NAME: tracklet_pseudomot_retrack_optuna_ft

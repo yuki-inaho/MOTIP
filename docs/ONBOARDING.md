@@ -100,11 +100,22 @@
   just compare-tracklet-5fps                   # 旧full runと5FPS fine-tuneのID proxy metrics比較
   just retrack-tracklet-5fps                    # 5FPS推論bbox列をByteTrack風に再ID付け → JSON/MOT/summary
   just video-retrack-tracklet-5fps 3 0          # 後段tracker結果から3fps mp4のみ生成
+  just optuna-retrack-tracklet-5fps 80 240      # Optunaで長tracklet重視の後段tracker param探索
+  just video-optuna-retrack-tracklet-5fps 3 0   # Optuna best retrack結果から3fps mp4のみ生成
+  just build-tracklet-pseudomot-retrack-optuna  # Optuna best retrack JSONをPseudoMOT疑似正解へ変換
+  just config-tracklet-retrack-optuna           # retrack-optuna疑似正解fine-tune config主要キー表示
+  just loader-tracklet-retrack-optuna           # retrack-optuna PseudoMOTのloader smoke
+  just train-tracklet-retrack-optuna            # checkpoint_39からretrack-optuna疑似正解で1epoch fine-tune
+  just infer-tracklet-retrack-optuna-ft 0 fp32  # retrack-optuna fine-tuned checkpoint_40で30FPS全frame推論
+  just video-tracklet-retrack-optuna-ft 3 0     # retrack-optuna fine-tuned raw推論から3fps mp4のみ生成
+  just compare-tracklet-retrack-optuna-ft       # Optuna疑似正解とfine-tune後raw出力をID proxy比較
   ```
   - 推論/可視化は `tools/infer_tracklet.py`（`RuntimeTracker` を frame毎に回し `outputs/.../infer/tracks.json` と `tracks_mot.txt` を出力）/ `tools/visualize_tracks.py`（JSON+元画像→ bbox+ID 描画）。既定で `checkpoint_7.pth` の EMA 重みを使用。出力は `outputs/`（git外）。
   - 5FPS ID fine-tuneは `tools/convert_coco_tracklets_to_pseudomot.py --frame-stride 6` で `datasets/TomatoTrackletMOT_5fps`（git外）を作り、`configs/finetune_tracklet_pseudomot_5fps_id16.yaml` で学習する。既定推論checkpointはsaturation判定で採用した `checkpoint_39.pth`。旧新比較は `tools/compare_track_json.py` が `unique_track_ids / detections` と track length proxy を出す。
   - 5FPS fine-tune単体では推論IDが毎フレーム変わるため、`tools/retrack_detections.py` は `tracks.json` の `track_id` を使わず bbox/score/category を検出列として扱い、ByteTrack風のIoU+速度予測でIDを付け直す。採用設定は `track_thresh=0.80`, `new_track_thresh=0.95`, `match_thresh=0.10`, `max_age=60`。成果物は `outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/`（git外）で、`summary.json` は raw比 `unique_ids_per_detection: 1.0 -> 0.062644`, `track_length_max: 114`, `bottom_to_top_tracks: 101` を記録する。確認用動画は `outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/tracks.mp4`（1219 frames, 3fps, 800x600）。
-- **依存ライブラリ:** torch 2.4.0+cu118 / torchvision / accelerate / tensorboard / einops / opencv-python / pycocotools / numpy<2 / pytest / ruff（詳細は `pyproject.toml` と `uv.lock`）。CUDA op: `models/ops`（`just build-ops`）。
+  - Optuna探索は `tools/tune_retrack_detections.py`（`optuna>=4.9.0`）で実行する。現時点のbestは `track_thresh=0.85`, `low_thresh=0.4`, `new_track_thresh=0.85`, `match_thresh=0.01`, `low_match_thresh=0.01`, `max_age=240`, `nms_iou=0.55`, `velocity_weight=0.0`, `velocity_momentum=0.65`。成果物は `outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/`（git外）で、`summary.json` は `unique_ids_per_detection=0.027223`, `track_length_mean=36.733978`, `track_length_max=151`, `num_tracks_ge_120=18`, `long_upward_tracks=196`, `bottom_to_top_tracks=67` を記録する。確認用動画は `outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/tracks.mp4`。
+  - Optuna best retrackを疑似正解化する場合は `tools/convert_track_json_to_pseudomot.py` で `datasets/TomatoTrackletMOT_retrack_optuna`（git外）を作る。`configs/finetune_tracklet_pseudomot_retrack_optuna.yaml` は `SAMPLE_LENGTHS=[8]`, `NUM_ID_VOCABULARY=224`, `RESUME_MODEL=checkpoint_39.pth`, `EPOCHS=41`。`checkpoint_40.pth` まで1epoch fine-tuneした結果、raw MOTIP推論は `25,712 detections / 25,712 unique IDs / track_length_mean=1.0` で、Optuna疑似正解の長trackletを内部IDへ転写できなかった。現時点の実用出力は `retrack_optuna/tracks.json` と `retrack_optuna/tracks.mp4` を優先する。
+- **依存ライブラリ:** torch 2.4.0+cu118 / torchvision / accelerate / tensorboard / einops / opencv-python / optuna / pycocotools / numpy<2 / pytest / ruff（詳細は `pyproject.toml` と `uv.lock`）。CUDA op: `models/ops`（`just build-ops`）。
 - **連絡先/責任者:** yoshikawa@inaho.co（yuki-inaho）。
 
 > ※本資料は必要に応じて拡張・縮退して構いません。記入済みドキュメントはバージョン管理してください。
