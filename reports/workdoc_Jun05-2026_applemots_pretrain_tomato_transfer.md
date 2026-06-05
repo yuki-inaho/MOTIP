@@ -277,3 +277,84 @@ uv run --no-sync python DEIM/train.py -c configs/deim_dfine/deim_hgnetv2_m_coco_
 | `2026-06-05` | `06:16:27 UTC+0000` | `Codex統括` | MOTIP commit/push | ✅DoD-14完了。MOTIP branch `cu118` で生成物混入なしを確認して commit/push。実装コミットは `914af95` (`Add AppleMOTS MOTIP transfer workflow`)。対象は AppleMOTS COCO/PseudoMOT変換CLI、BFT/AppleMOTS/tomato transfer configs、ScheduleFree/Muon optimizer integration、移植CLI、tests、ONBOARDING、reports/workdoc。`outputs/`, `datasets/`, `pretrains/`, checkpoint, mp4 はstageなし。 |
 | `2026-06-05` | `06:18:24 UTC+0000` | `Codex統括` | 最終完了監査 | MOTIPは `cu118`, `HEAD=origin/cu118=30825c8`、DEIM_sandboxは `deimv1+cu128`, `HEAD=origin/deimv1+cu128=ebf975b`。DoD-01〜14は全て `[x]`。成果物実在確認: AppleMOTS pretrain `outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/checkpoint_3.pth`、tomato転移後 `tracks.json`, `tracks_mot.txt`, `tracks.mp4`, `comparison_vs_optuna_retrack.json`。実行中の `train.py` / `infer_tracklet.py` / `visualize_tracks.py` はなし。 |
 | `2026-06-05` | `09:44:58 UTC+0000` | `Codex統括` | AppleMOTS平均track長の追加確認 | 平均track長を `detections / unique track ids` と定義して再集計。正解GT: train 38.995 / testing 33.000 / all 36.214 frames/track。AppleMOTS pretrain checkpoint `outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/checkpoint_3.pth` で全12sequenceへMOTIP推論し、出力は `outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/infer_applemots_eval/`（23M, git外）。MOTIP出力: train 4.410 / testing 4.451 / all 4.427 frames/track、全体でGT比約12.2%。中央値は各sequenceで概ね1 frame/trackで、AppleMOTSでもID断片化が強い。トマトの外観類似性は悪化要因になり得るが、AppleMOTSでも短いためMOTIP tracking重み・推論時ID割当・学習設定側の未解決課題が残る。 |
+
+---
+
+## 7. 追加調査: AppleMOTS train/0000 小規模overfitによるID断片化の切り分け
+
+### 7.1 追加目的
+
+ユーザー追加仮説:
+
+- tomatoは全果実の見た目が非常に似ており、DEIM/DETR系の検出特徴量上で個体差が出にくい可能性がある。
+- ただしAppleMOTS trainでもMOTIP raw出力の平均track長が約4であるため、tomato固有の見た目類似だけでなく、MOTIPのID decoder/RuntimeTracker側にも未解決要因がある可能性が高い。
+
+追加実験の目的は、AppleMOTS train/0000の小規模データで「過学習できるはず」の条件を作り、訓練データ上でも長trackletをMOTIP raw出力として再現できるかを確認すること。
+
+### 7.2 追加DoD
+
+- [x] DoD-A1: AppleMOTS train/0000のGT平均track長と既存MOTIP出力を比較する。
+- [x] DoD-A2: MOTIP bbox streamに対してOptuna/後段retrackを行い、長tracklet教師を作れるか確認する。
+- [x] DoD-A3: retrack教師をPseudoMOTへ変換し、loader smokeを通す。
+- [x] DoD-A4: retrack教師でMOTIPを小規模fine-tuneし、train/0000 raw推論のtrack長を測る。
+- [x] DoD-A5: DETR freeze + ID-only overfitでも同じ評価を行い、bbox崩れとID decoder不全を切り分ける。
+- [x] DoD-A6: 結果と解釈を本書と `docs/ONBOARDING.md` に追記する。
+
+### 7.3 実行結果サマリ
+
+| 条件 | frames | detections | tracks | mean length | median | max | 備考 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
+| AppleMOTS GT train/0000 | 71 | 6301 | 301 | 20.934 | 18 | 51 | 正解。密な果実bboxとID。 |
+| AppleMOTS pretrain raw MOTIP | 71 | 4342 | 1040 | 4.175 | 1 | 67 | `checkpoint_3.pth`。trainでもID断片化。 |
+| Optuna center-distance retrack教師 | 71 | 4417 | 128 | 34.508 | 37 | 61 | MOTIP bbox streamから後段retrackで長tracklet化成功。ただしover-merge気味。 |
+| retrack教師でjoint overfit後 raw MOTIP | 71 | 2935 | 1237 | 2.373 | 1 | 71 | `checkpoint_11.pth`。DETRも更新され、検出が保守化しIDは改善せず。 |
+| joint overfit後 only-DETR + 同retrack | 71 | 1478 | 58 | 25.483 | 25 | 52 | bbox件数が減ったため教師より弱いが、後段retrackなら長くなる。 |
+| DETR freeze + ID-only overfit後 raw MOTIP | 71 | 4746 | 2587 | 1.835 | 1 | 71 | `checkpoint_19.pth`。bboxは戻ったがIDはさらに断片化。 |
+| DETR freeze + ID-only only-DETR + 同retrack | 71 | 3677 | 129 | 28.504 | 29 | 55 | bbox/運動からは長trackletを再生成できる。MOTIP内部ID経路がボトルネック。 |
+
+### 7.4 追加実装・成果物
+
+Tracked changes:
+
+- `tools/infer_tracklet.py`
+  - `--only-detr` を追加し、MOTIP ID decoderを通さずDETR bbox streamをJSON/MOT txtへ出せるようにした。
+- `tools/retrack_detections.py`
+  - IoUに加えて center-distance matching を追加。
+  - `--center-distance-thresh`, `--center-weight` を追加。
+- `tools/tune_retrack_detections.py`
+  - Optuna探索空間に `center_distance_thresh`, `center_weight` を追加。
+- `tests/test_retrack_detections.py`
+  - center-distance matchingで低IoUの近接移動をbridgeできる回帰テストを追加。
+- `configs/finetune_applemots_overfit_train0000_retrack.yaml`
+  - retrack教師でjoint fine-tuneする小規模overfit probe。
+- `configs/finetune_applemots_overfit_train0000_retrack_idonly.yaml`
+  - `DETR_NUM_TRAIN_FRAMES=0`, `ID_LOSS_WEIGHT=5.0` のID-only overfit probe。
+- `justfile`
+  - `build/config/loader/train` 系のAppleMOTS overfit targetと、ID-only推論targetを追加。
+
+Git外成果物:
+
+- `outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/retrack_overfit_train0000_det020_onlydetr_center/`
+- `datasets/AppleMOTSPseudoMOT_overfit_train0000_retrack/`
+- `outputs/applemots_overfit_train0000_retrack_sl8_schedulefree/`
+- `outputs/applemots_overfit_train0000_retrack_idonly_sl8_schedulefree/`
+
+### 7.5 重要な発見
+
+- AppleMOTSでもMOTIP raw IDはtrain上で平均約4frames/trackに短く、tomato固有の「果実が似すぎる」だけでは説明しきれない。
+- 一方で、MOTIP/DETR bbox streamを外部retrackすると平均34.5frames/trackまで伸ばせるため、bboxと空間運動だけなら長tracklet化は可能。
+- joint overfitでは `id_loss` が 4.214 -> 3.727 まで下がったが、raw推論の平均track長は 2.373 へ悪化した。DETRまで更新したことで検出数が 2935 に落ち、bbox streamも弱くなった。
+- DETR freeze + ID-only overfitでは `detr_grad_norm=0.0000` を全epochで確認し、bbox側を固定できた。`id_loss` は 4.558 -> 3.982 までしか下がらず、raw推論平均track長は 1.835 で改善しなかった。
+- ID-only checkpointのonly-DETR bboxに後段retrackを当てると平均28.5frames/trackになるため、検出特徴・空間位置から後段trackerがtrackletを作る余地は残っている。
+- 現時点の結論: 実用出力はMOTIP raw IDではなく、`--only-detr` bbox stream + tuned retrackerを優先すべき。MOTIP内部IDを改善するには、果実個体差を増やす特徴、外観ReID補助、ID decoderの教師設計/assignment設計、またはtracklet-level contrastive objectiveの追加が必要。
+
+### 7.6 作業記録（追加）
+
+| 日付 | 時刻 | 作業者 | 作業内容 | 結果・備考 |
+| :--- | :--- | :--- | :--- | :--- |
+| `2026-06-05` | `10:12:10 UTC+0000` | `Codex統括` | retrack overfit結果確認 | AppleMOTS train/0000 GTは mean 20.934。Optuna center-distance retrack教師は mean 34.508。joint overfit後rawは mean 2.373で改善せず。 |
+| `2026-06-05` | `10:17:00 UTC+0000` | `Codex統括` | DETR freeze + ID-only overfit開始 | `configs/finetune_applemots_overfit_train0000_retrack_idonly.yaml` を追加。`DETR_NUM_TRAIN_FRAMES=0`, `ID_LOSS_WEIGHT=5.0`, `EPOCHS=20`, ScheduleFree, bf16, EMA, EarlyStop=True。 |
+| `2026-06-05` | `10:23:38 UTC+0000` | `Codex統括` | DETR freeze + ID-only overfit完了 | `checkpoint_19.pth` 生成。最終metrics: loss 28.8620 / detr_loss 8.9521 / id_loss 3.9820 / max_cuda 1089.85MB。全epochで `detr_grad_norm=0.0000`。 |
+| `2026-06-05` | `10:24:00 UTC+0000` | `Codex統括` | ID-only checkpoint raw推論 | `infer_train0000/tracks.json`: 71 frames / 4746 detections / 2587 unique IDs / mean 1.835。raw RuntimeTrackerのID断片化は改善せず。 |
+| `2026-06-05` | `10:25:00 UTC+0000` | `Codex統括` | ID-only bbox stream + external retrack | only-DETR det=0.2は3994 detections。同じcenter-distance retrackで 3677 detections / 129 IDs / mean 28.504 / median 29 / max 55。bbox+運動なら長tracklet化可能。 |
+| `2026-06-05` | `10:29:29 UTC+0000` | `Codex統括` | 作業完了cleanup | ユーザー指示によりMOTIP repo内のgit外生成物 `outputs/`（35G）, `datasets/`（89M）, `pretrains/`（1009M）を削除。`.venv` は作業継続用に残した。`uv cache clean --force` で `/home/kasm-user/.cache/uv` から 8.1GiB / 47,736 files を削除。cleanup後のMOTIP repoサイズは6.1G、uv cacheは0。 |

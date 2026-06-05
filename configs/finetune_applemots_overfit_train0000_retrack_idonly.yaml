@@ -1,0 +1,25 @@
+# ID-only overfit probe on the tiny AppleMOTS train/0000 re-tracked subset.
+#
+# Why this exists:
+#   The first overfit probe updated DETR and MOTIP together. Although id_loss
+#   decreased, the fine-tuned detector became too conservative on train/0000 and
+#   raw RuntimeTracker IDs stayed fragmented. This config freezes DETR and trains
+#   only MOTIP tracking modules so bbox quality from the AppleMOTS checkpoint is
+#   preserved while testing whether the ID path can memorize long teacher tracks.
+
+SUPER_CONFIG_PATH: ./configs/finetune_applemots_overfit_train0000_retrack.yaml
+
+DETR_NUM_TRAIN_FRAMES: 0
+ID_LOSS_WEIGHT: 5.0
+
+EPOCHS: 20
+SAVE_CHECKPOINT_PER_EPOCH: 2
+MULTI_LAST_CHECKPOINTS: 1
+
+EARLY_STOP: True
+EARLY_STOP_PATIENCE: 5
+EARLY_STOP_MIN_DELTA: 0.0
+EARLY_STOP_START_EPOCH: 4
+
+OUTPUTS_DIR: ./outputs/applemots_overfit_train0000_retrack_idonly_sl8_schedulefree
+EXP_NAME: applemots_overfit_train0000_retrack_idonly_sl8_schedulefree

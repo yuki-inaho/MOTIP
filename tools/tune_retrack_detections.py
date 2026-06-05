@@ -31,6 +31,8 @@ MAX_AGE_CHOICES = [40, 50, 60, 75, 90, 120, 150, 180, 240, 300]
 NMS_IOU_CHOICES = [0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85]
 VELOCITY_WEIGHT_CHOICES = [0.0, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 VELOCITY_MOMENTUM_CHOICES = [0.50, 0.65, 0.80, 0.90, 0.95]
+CENTER_DISTANCE_THRESH_CHOICES = [0.0, 20.0, 35.0, 50.0, 75.0, 100.0, 140.0]
+CENTER_WEIGHT_CHOICES = [0.25, 0.5, 1.0, 2.0]
 
 
 def sample_params(trial: optuna.Trial) -> dict[str, Any]:
@@ -55,6 +57,8 @@ def sample_params(trial: optuna.Trial) -> dict[str, Any]:
         "nms_iou": trial.suggest_categorical("nms_iou", NMS_IOU_CHOICES),
         "velocity_weight": trial.suggest_categorical("velocity_weight", VELOCITY_WEIGHT_CHOICES),
         "velocity_momentum": trial.suggest_categorical("velocity_momentum", VELOCITY_MOMENTUM_CHOICES),
+        "center_distance_thresh": trial.suggest_categorical("center_distance_thresh", CENTER_DISTANCE_THRESH_CHOICES),
+        "center_weight": trial.suggest_categorical("center_weight", CENTER_WEIGHT_CHOICES),
     }
 
 

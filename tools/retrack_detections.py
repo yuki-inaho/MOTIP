@@ -51,12 +51,42 @@ def iou_matrix(a_tlwh: np.ndarray, b_tlwh: np.ndarray) -> np.ndarray:
     return np.divide(inter, union, out=np.zeros_like(inter), where=union > 0)
 
 
+def center_distance_matrix(a_tlwh: np.ndarray, b_tlwh: np.ndarray) -> np.ndarray:
+    if len(a_tlwh) == 0 or len(b_tlwh) == 0:
+        return np.zeros((len(a_tlwh), len(b_tlwh)), dtype=float)
+    a_centers = np.column_stack((a_tlwh[:, 0] + a_tlwh[:, 2] / 2.0, a_tlwh[:, 1] + a_tlwh[:, 3] / 2.0))
+    b_centers = np.column_stack((b_tlwh[:, 0] + b_tlwh[:, 2] / 2.0, b_tlwh[:, 1] + b_tlwh[:, 3] / 2.0))
+    return np.linalg.norm(a_centers[:, None, :] - b_centers[None, :, :], axis=2)
+
+
 def match_by_iou(track_boxes: np.ndarray, det_boxes: np.ndarray, threshold: float) -> list[tuple[int, int]]:
     scores = iou_matrix(track_boxes, det_boxes)
     if scores.size == 0:
         return []
     row_ind, col_ind = linear_sum_assignment(-scores)
     return [(int(r), int(c)) for r, c in zip(row_ind, col_ind) if scores[r, c] >= threshold]
+
+
+def match_by_similarity(
+    track_boxes: np.ndarray,
+    det_boxes: np.ndarray,
+    iou_threshold: float,
+    center_distance_thresh: float,
+    center_weight: float,
+) -> list[tuple[int, int]]:
+    ious = iou_matrix(track_boxes, det_boxes)
+    if ious.size == 0:
+        return []
+    if center_distance_thresh <= 0:
+        row_ind, col_ind = linear_sum_assignment(-ious)
+        return [(int(r), int(c)) for r, c in zip(row_ind, col_ind) if ious[r, c] >= iou_threshold]
+
+    distances = center_distance_matrix(track_boxes, det_boxes)
+    center_scores = np.exp(-np.square(distances / max(center_distance_thresh, 1e-6)))
+    scores = ious + center_weight * center_scores
+    valid = (ious >= iou_threshold) | (distances <= center_distance_thresh)
+    row_ind, col_ind = linear_sum_assignment(-scores)
+    return [(int(r), int(c)) for r, c in zip(row_ind, col_ind) if valid[r, c]]
 
 
 def nms_detections(detections: list[dict[str, Any]], nms_iou: float) -> list[dict[str, Any]]:
@@ -165,7 +195,13 @@ def run_tracker(frames: list[dict[str, Any]], args: argparse.Namespace) -> tuple
                 return []
             track_boxes = np.array([active[i].predict_bbox(args.velocity_weight) for i in track_indices], dtype=float)
             det_boxes = np.array([detections[i]["bbox"] for i in det_indices], dtype=float)
-            pairs = match_by_iou(track_boxes, det_boxes, threshold)
+            pairs = match_by_similarity(
+                track_boxes=track_boxes,
+                det_boxes=det_boxes,
+                iou_threshold=threshold,
+                center_distance_thresh=args.center_distance_thresh,
+                center_weight=args.center_weight,
+            )
             return [(track_indices[t], det_indices[d]) for t, d in pairs]
 
         for track_index, det_index in match_subset(unmatched_track_indices, high_indices, args.match_thresh):
@@ -289,6 +325,8 @@ def summarize_tracks(
             "nms_iou": args.nms_iou,
             "velocity_weight": args.velocity_weight,
             "velocity_momentum": args.velocity_momentum,
+            "center_distance_thresh": args.center_distance_thresh,
+            "center_weight": args.center_weight,
             "min_output_hits": args.min_output_hits,
         },
     }
@@ -328,6 +366,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nms-iou", type=float, default=0.7)
     parser.add_argument("--velocity-weight", type=float, default=1.0)
     parser.add_argument("--velocity-momentum", type=float, default=0.8)
+    parser.add_argument(
+        "--center-distance-thresh",
+        type=float,
+        default=0.0,
+        help="Also allow matches whose center distance is within this many pixels. 0 disables distance matching.",
+    )
+    parser.add_argument("--center-weight", type=float, default=1.0, help="Weight for center-distance similarity.")
     parser.add_argument("--min-output-hits", type=int, default=1)
     parser.add_argument("--min-long-track-length", type=int, default=30)
     parser.add_argument("--min-vertical-delta", type=float, default=250.0)

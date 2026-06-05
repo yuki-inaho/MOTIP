@@ -110,6 +110,7 @@ def run_inference(args: argparse.Namespace) -> dict:
         newborn_thresh=newborn_thresh,
         id_thresh=id_thresh,
         area_thresh=area_thresh,
+        only_detr=args.only_detr,
         dtype=dtype,
     )
 
@@ -153,6 +154,7 @@ def run_inference(args: argparse.Namespace) -> dict:
             "thresholds": {
                 "det": det_thresh, "newborn": newborn_thresh, "id": id_thresh,
                 "miss_tolerance": miss_tolerance, "assignment": assignment, "area": area_thresh,
+                "only_detr": bool(args.only_detr),
             },
             "num_unique_track_ids": len(unique_ids),
             "num_detections": len(mot_lines),
@@ -190,6 +192,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--id-thresh", type=float, default=None)
     parser.add_argument("--miss-tolerance", type=int, default=None)
     parser.add_argument("--assignment-protocol", type=str, default=None)
+    parser.add_argument(
+        "--only-detr",
+        action="store_true",
+        help="Bypass the MOTIP ID decoder and dump DETR detections only before external re-tracking.",
+    )
     return parser.parse_args()
 
 

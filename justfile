@@ -20,6 +20,11 @@ applemots_smoke_config := "configs/train_applemots_pseudomot_smoke.yaml"
 applemots_bft_schedulefree_config := "configs/train_applemots_pseudomot_bft_official_schedulefree.yaml"
 applemots_bft_sl8_pretrain_config := "configs/train_applemots_pseudomot_bft_schedulefree_sl8_pretrain.yaml"
 applemots_bft_sl8_pretrain_ckpt := "outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/checkpoint_3.pth"
+applemots_overfit_retrack_dataset := "datasets/AppleMOTSPseudoMOT_overfit_train0000_retrack"
+applemots_overfit_retrack_config := "configs/finetune_applemots_overfit_train0000_retrack.yaml"
+applemots_overfit_retrack_ckpt := "outputs/applemots_overfit_train0000_retrack_sl8_schedulefree/checkpoint_11.pth"
+applemots_overfit_retrack_idonly_config := "configs/finetune_applemots_overfit_train0000_retrack_idonly.yaml"
+applemots_overfit_retrack_idonly_ckpt := "outputs/applemots_overfit_train0000_retrack_idonly_sl8_schedulefree/checkpoint_19.pth"
 applemots_to_tomato_tracking_pretrain := "pretrains/motip_applemots_tracking_to_tomato_retrack_optuna_sl20.pth"
 applemots_to_tomato_tracking_report := "reports/motip_applemots_tracking_to_tomato_retrack_optuna_sl20_transfer_report.json"
 motip_dancetrack_ckpt := "outputs/r50_deformable_detr_motip_dancetrack/r50_deformable_detr_motip_dancetrack.pth"
@@ -98,6 +103,15 @@ build-applemots-coco-deim:
         --applemots-root "{{applemots_raw}}" --output-root "{{applemots_coco_deim_dataset}}" \
         --splits train testing --category-id 0
 
+# Build the tiny AppleMOTS train/0000 overfit dataset from the Optuna center-distance retrack teacher.
+build-applemots-overfit-retrack-train0000:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/convert_track_json_to_pseudomot.py \
+        --track-json "outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/retrack_overfit_train0000_det020_onlydetr_center/tracks.json" \
+        --image-dir "datasets/AppleMOTSPseudoMOT/train/0000/img1" \
+        --output-root "{{applemots_overfit_retrack_dataset}}" \
+        --sequence-name "applemots_train0000_retrack_center" \
+        --split train --frame-rate 30
+
 summary-applemots-coco:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'import json; from pathlib import Path; s=json.loads(Path("{{applemots_coco_dataset}}/conversion_summary.json").read_text()); print(json.dumps(s["by_split"], indent=2)); print("train_ann", s["split_summaries"][0]["ann_file"]); print("testing_ann", s["split_summaries"][1]["ann_file"])'
 
@@ -121,6 +135,9 @@ loader-tracklet-retrack-optuna:
 
 loader-applemots:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from data.joint_dataset import JointDataset; ds = JointDataset(data_root="./datasets", datasets=["PseudoMOT"], splits=["train"], pseudomot_sub_dir="AppleMOTSPseudoMOT"); ds.set_sample_details(sample_length=2, sample_interval=1); print(ds.statistics()); print("samples", len(ds))'
+
+loader-applemots-overfit-retrack:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from data.joint_dataset import JointDataset; ds = JointDataset(data_root="./datasets", datasets=["PseudoMOT"], splits=["train"], pseudomot_sub_dir="AppleMOTSPseudoMOT_overfit_train0000_retrack"); ds.set_sample_details(sample_length=8, sample_interval=1); print(ds.statistics()); print("samples", len(ds))'
 
 train-tracklet-smoke:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python train.py --config-path "{{tracklet_config}}"
@@ -157,6 +174,12 @@ config-applemots-bft-schedulefree:
 
 config-applemots-bft-sl8-pretrain:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{applemots_bft_sl8_pretrain_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["DATASETS", "DATASET_SPLITS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "REL_PE_LENGTH", "MISS_TOLERANCE", "AUG_RESIZE_SCALES", "AUG_MAX_SIZE", "AUG_NUM_GROUPS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "OPTIMIZER_TYPE", "SCHEDULER_TYPE", "RESUME_MODEL", "EPOCHS", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "EARLY_STOP", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
+config-applemots-overfit-retrack:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{applemots_overfit_retrack_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "RESUME_MODEL", "RESUME_OPTIMIZER", "RESUME_SCHEDULER", "EPOCHS", "MAX_TRAIN_STEPS", "OPTIMIZER_TYPE", "SCHEDULER_TYPE", "AMP_DTYPE", "EMA_ENABLED", "EARLY_STOP", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
+config-applemots-overfit-retrack-idonly:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{applemots_overfit_retrack_idonly_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "DETR_NUM_TRAIN_FRAMES", "ID_LOSS_WEIGHT", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "RESUME_MODEL", "RESUME_OPTIMIZER", "RESUME_SCHEDULER", "EPOCHS", "MAX_TRAIN_STEPS", "OPTIMIZER_TYPE", "SCHEDULER_TYPE", "AMP_DTYPE", "EMA_ENABLED", "EARLY_STOP", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
 
 # Launch the FULL tracklet training (background recommended; started in B6, not here).
 train-tracklet-full:
@@ -201,6 +224,12 @@ train-applemots-bft-schedulefree-smoke STEPS="60":
 
 train-applemots-bft-sl8-pretrain:
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{applemots_bft_sl8_pretrain_config}}"
+
+train-applemots-overfit-retrack:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{applemots_overfit_retrack_config}}"
+
+train-applemots-overfit-retrack-idonly:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{applemots_overfit_retrack_idonly_config}}"
 
 transplant-applemots-to-tomato:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/transplant_motip_tracking_weights.py \
@@ -290,6 +319,15 @@ infer-tracklet-bft-official MAX="0" DTYPE="fp32" CKPT=tracklet_bft_official_ckpt
         --image-dir "{{tracklet_seq_images}}" --output-json "{{tracklet_bft_official_infer_json}}" \
         --output-mot "outputs/tracklet_pseudomot_retrack_optuna_bft_official_ft/infer_30fps/tracks_mot.txt" \
         --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
+
+# Run the AppleMOTS train/0000 ID-only overfit checkpoint over its training frames.
+infer-applemots-overfit-retrack-idonly-train0000 MAX="0" DTYPE="fp32" CKPT=applemots_overfit_retrack_idonly_ckpt:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/infer_tracklet.py \
+        --config "{{applemots_overfit_retrack_idonly_config}}" --checkpoint "{{CKPT}}" --use-ema \
+        --image-dir "datasets/AppleMOTSPseudoMOT/train/0000/img1" \
+        --output-json "outputs/applemots_overfit_train0000_retrack_idonly_sl8_schedulefree/infer_train0000/tracks.json" \
+        --output-mot "outputs/applemots_overfit_train0000_retrack_idonly_sl8_schedulefree/infer_train0000/tracks_mot.txt" \
+        --max-shorter 384 --max-longer 1024 --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
 
 # Render tracking JSON -> annotated frames + mp4. MAX=0 = all, FPS default 3.
 visualize-tracklet-full MAX="0" FPS="3":

@@ -14,6 +14,8 @@ def _args(**overrides):
         "nms_iou": 1.0,
         "velocity_weight": 1.0,
         "velocity_momentum": 0.0,
+        "center_distance_thresh": 0.0,
+        "center_weight": 1.0,
         "min_output_hits": 1,
         "min_long_track_length": 2,
         "min_vertical_delta": 10.0,
@@ -52,3 +54,22 @@ def test_retrack_uses_low_score_detection_for_existing_track_but_not_new_track()
     assert [track["track_id"] for track in output[1]["tracks"]] == [1]
     assert output[2]["tracks"] == []
     assert summary["unique_track_ids"] == 1
+
+
+def test_center_distance_matching_can_bridge_low_iou_motion():
+    frames = [
+        {"frame_id": 1, "file_name": "000001.jpg", "tracks": [{"track_id": 10, "score": 0.95, "category": 0, "bbox": [10, 60, 10, 10]}]},
+        {"frame_id": 2, "file_name": "000002.jpg", "tracks": [{"track_id": 11, "score": 0.96, "category": 0, "bbox": [24, 60, 10, 10]}]},
+    ]
+
+    no_distance_output, no_distance_summary = run_tracker(frames, _args(match_thresh=0.1))
+    distance_output, distance_summary = run_tracker(
+        frames,
+        _args(match_thresh=0.1, center_distance_thresh=20.0, center_weight=1.0),
+    )
+
+    assert [track["track_id"] for frame in no_distance_output for track in frame["tracks"]] == [1, 2]
+    assert no_distance_summary["unique_track_ids"] == 2
+    assert [track["track_id"] for frame in distance_output for track in frame["tracks"]] == [1, 1]
+    assert distance_summary["unique_track_ids"] == 1
+    assert distance_summary["track_length_max"] == 2

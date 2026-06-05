@@ -1,0 +1,43 @@
+# Overfit probe on a tiny AppleMOTS train subset.
+#
+# Purpose:
+#   Verify whether MOTIP can learn long re-tracked IDs on training data before
+#   spending time on larger pretraining/fine-tuning sweeps.
+#
+# Dataset:
+#   datasets/AppleMOTSPseudoMOT_overfit_train0000_retrack
+#   - source sequence: AppleMOTS train/0000 (71 frames)
+#   - teacher labels: MOTIP DETR detections re-tracked with Optuna-tuned
+#     IoU + center-distance matching
+#   - teacher proxy: 4,417 boxes / 128 IDs / mean length 34.51
+#
+# Keep NUM_ID_VOCABULARY/NUM_TRAINING_IDS compatible with
+# outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/checkpoint_3.pth
+# (ID tensor shape 256 x 321) so this is a true fine-tune/overfit probe.
+
+SUPER_CONFIG_PATH: ./configs/train_applemots_pseudomot_bft_schedulefree_sl8_pretrain.yaml
+
+PSEUDOMOT_SUB_DIR: AppleMOTSPseudoMOT_overfit_train0000_retrack
+
+SAMPLE_LENGTHS: [8]
+SAMPLE_INTERVALS: [1]
+
+NUM_ID_VOCABULARY: 320
+NUM_TRAINING_IDS: 256
+
+RESUME_MODEL: ./outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/checkpoint_3.pth
+RESUME_OPTIMIZER: False
+RESUME_SCHEDULER: False
+
+EPOCHS: 12
+MAX_TRAIN_STEPS:
+SAVE_CHECKPOINT_PER_EPOCH: 1
+MULTI_LAST_CHECKPOINTS: 1
+
+EARLY_STOP: True
+EARLY_STOP_PATIENCE: 4
+EARLY_STOP_MIN_DELTA: 0.0
+EARLY_STOP_START_EPOCH: 4
+
+OUTPUTS_DIR: ./outputs/applemots_overfit_train0000_retrack_sl8_schedulefree
+EXP_NAME: applemots_overfit_train0000_retrack_sl8_schedulefree
