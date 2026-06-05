@@ -199,7 +199,7 @@ AppleMOTSで得たcheckpointをsource/baseとして、`TomatoTrackletMOT_retrack
 
 ### 手順 15: review-written-workdoc最終レビューを行い、必要ならcommit/pushする
 - [x] 🖐 **操作**: rubricで本書を再レビューし、Blocker/Majorを修正する。ユーザー指示または作業書DoDに従いcommit/pushする。
-- [ ] 🔎 **確認**: DoD充足状況が本書にあり、未達があれば未達として明記されている。commitした場合は `HEAD == origin/cu118`。
+- [x] 🔎 **確認**: DoD充足状況が本書にあり、未達があれば未達として明記されている。commitした場合は `HEAD == origin/cu118`。
 - [x] 🧪 **テスト**: `manual_final_audit`。DoDごとの証跡を確認する。
 - [x] 🛠 **エラー時対処**: 長時間学習中断や外部環境同期失敗が残る場合は、blockedではなく再開可能なhandoffとして記録する。
 
@@ -239,7 +239,7 @@ uv run --no-sync python DEIM/train.py -c configs/deim_dfine/deim_hgnetv2_m_coco_
 - [x] DoD-11: 実験結果レポート、docs/ONBOARDING、reportsコピーが更新されている。
 - [x] DoD-12: pytest/ruff/git diff check/生成物混入チェックがgreenである。
 - [x] DoD-13: 最終workdoc reviewでBlocker/Majorが0、または残課題が明示されている。
-- [ ] DoD-14: commit/pushする場合、生成物混入なしで `HEAD == origin/<branch>` が確認されている。
+- [x] DoD-14: commit/pushする場合、生成物混入なしで `HEAD == origin/<branch>` が確認されている。
 
 ---
 
@@ -274,3 +274,4 @@ uv run --no-sync python DEIM/train.py -c configs/deim_dfine/deim_hgnetv2_m_coco_
 | `2026-06-05` | `06:13:04 UTC+0000` | `Codex統括` | 行動カウント20到達時の状況記録 / 手順14品質gate | 定期リマインダーを表示し、行動カウントをリセット。✅DoD-12完了。MOTIP: `UV_PROJECT_ENVIRONMENT=/home/kasm-user/Desktop/MOTIP/.venv uv run --no-sync pytest tests/ -q` は 61 passed / 8 warnings、対象Pythonの `ruff check` は All checks passed、`git diff --check` はOK。生成物混入grepでは `outputs/`, `datasets/`, `pretrains/`, `*.pth`, `*.mp4` はgit対象外で、stage候補はsource/config/test/doc/reportのみ。DEIM_sandboxは `git diff --check` OKで、AppleMOTS用config 2本のみ未追跡。 |
 | `2026-06-05` | `06:13:59 UTC+0000` | `Codex統括` | 手順15途中: review-written-workdoc最終レビュー | ✅DoD-13完了。`review-written-workdoc` rubricに基づき本書を自己レビュー。Verdictは `PASS_WITH_NOTES`。Blocker/Majorなし。残る注意点は、AppleMOTS転移tomato実験は実行完了したがID改善は未達であり、これは手順12・DoD-10・ONBOARDINGに「改善未達」として明記済み。commit/push確認はDoD-14で実施するため、手順15の確認チェックはcommit後に完了する。 |
 | `2026-06-05` | `06:16:00 UTC+0000` | `Codex統括` | DEIM_sandbox commit/push | `/workspace/Project/DEIM_sandbox` branch `deimv1+cu128` で AppleMOTS DEIM smoke config 2本を commit/push。commit `ebf975b` (`Add AppleMOTS DEIM smoke configs`)。対象: `configs/dataset/coco_detection_applemots.yml`, `configs/deim_dfine/deim_hgnetv2_m_coco_applemots_smoke.yml`。 |
+| `2026-06-05` | `06:16:27 UTC+0000` | `Codex統括` | MOTIP commit/push | ✅DoD-14完了。MOTIP branch `cu118` で生成物混入なしを確認して commit/push。実装コミットは `914af95` (`Add AppleMOTS MOTIP transfer workflow`)。対象は AppleMOTS COCO/PseudoMOT変換CLI、BFT/AppleMOTS/tomato transfer configs、ScheduleFree/Muon optimizer integration、移植CLI、tests、ONBOARDING、reports/workdoc。`outputs/`, `datasets/`, `pretrains/`, checkpoint, mp4 はstageなし。 |
