@@ -7,7 +7,6 @@ import einops
 from accelerate import Accelerator
 from accelerate.state import PartialState
 from torch.utils.data import DataLoader
-from torch.optim import AdamW
 from torch.optim.lr_scheduler import MultiStepLR
 from collections import defaultdict
 from torchvision.transforms import v2
@@ -26,6 +25,7 @@ from log.log import TPS, Metrics
 from models.misc import load_detr_pretrain, save_checkpoint, load_checkpoint
 from models.misc import get_model
 from models.ema import ModelEMA
+from models.optim import build_optimizer, set_optimizer_mode
 from utils.nested_tensor import NestedTensor
 from submit_and_evaluate import submit_and_evaluate_one_model
 
@@ -119,35 +119,43 @@ def train_engine(config: dict):
             if "detr" in n:
                 p.requires_grad = False     # only train the MOTIP part.
     param_groups = get_param_groups(model, config)
-    optimizer = AdamW(
-        params=param_groups,
-        lr=config["LR"],
-        weight_decay=config["WEIGHT_DECAY"],
-    )
-    scheduler = MultiStepLR(
-        optimizer=optimizer,
-        milestones=config["SCHEDULER_MILESTONES"],
-        gamma=config["SCHEDULER_GAMMA"],
-    )
+    optimizer = build_optimizer(params=param_groups, config=config)
+    scheduler_type = config.get("SCHEDULER_TYPE", "MultiStepLR")
+    scheduler = None
+    if scheduler_type == "MultiStepLR":
+        scheduler = MultiStepLR(
+            optimizer=optimizer,
+            milestones=config["SCHEDULER_MILESTONES"],
+            gamma=config["SCHEDULER_GAMMA"],
+        )
+    elif scheduler_type in (None, "None", "none"):
+        scheduler = None
+    else:
+        raise ValueError(f"Unsupported SCHEDULER_TYPE={scheduler_type!r}")
+    logger.info(log=f"Optimizer={config.get('OPTIMIZER_TYPE', 'AdamW')}, scheduler={scheduler_type}.")
 
     # Other infos:
     only_detr = config["ONLY_DETR"]
 
     # Resuming:
     if config["RESUME_MODEL"] is not None:
+        if config["RESUME_SCHEDULER"] and scheduler is None:
+            raise ValueError("RESUME_SCHEDULER=True requires a scheduler, but SCHEDULER_TYPE is None.")
         load_checkpoint(
             model=model,
             path=config["RESUME_MODEL"],
             optimizer=optimizer if config["RESUME_OPTIMIZER"] else None,
-            scheduler=scheduler if config["RESUME_SCHEDULER"] else None,
+            scheduler=scheduler if config["RESUME_SCHEDULER"] and scheduler is not None else None,
             states=train_states,
         )
         # Different processing on scheduler:
         if config["RESUME_SCHEDULER"]:
+            assert scheduler is not None
             scheduler.step()
         else:
-            for _ in range(0, train_states["start_epoch"]):
-                scheduler.step()
+            if scheduler is not None:
+                for _ in range(0, train_states["start_epoch"]):
+                    scheduler.step()
         logger.success(
             log=f"Resume the model from '{config['RESUME_MODEL']}', "
                 f"optimizer={config['RESUME_OPTIMIZER']}, "
@@ -188,6 +196,7 @@ def train_engine(config: dict):
         )
 
     for epoch in range(train_states["start_epoch"], config["EPOCHS"]):
+        set_optimizer_mode(optimizer, "train")
         logger.info(log=f"Start training epoch {epoch}.")
         epoch_start_timestamp = TPS.timestamp()
         # Prepare the sampler for the current epoch:
@@ -269,6 +278,7 @@ def train_engine(config: dict):
 
         # Save checkpoint:
         if (epoch + 1) % config["SAVE_CHECKPOINT_PER_EPOCH"] == 0:
+            set_optimizer_mode(optimizer, "eval")
             save_checkpoint(
                 model=model,
                 path=os.path.join(outputs_dir, f"checkpoint_{epoch}.pth"),
@@ -278,8 +288,10 @@ def train_engine(config: dict):
                 only_detr=only_detr,
                 ema=ema,
             )
+            set_optimizer_mode(optimizer, "train")
             if config["INFERENCE_DATASET"] is not None:
                 assert config["INFERENCE_SPLIT"] is not None, "Please set the INFERENCE_SPLIT for inference."
+                set_optimizer_mode(optimizer, "eval")
                 eval_metrics = submit_and_evaluate_one_model(
                     is_evaluate=True,
                     accelerator=accelerator,
@@ -302,6 +314,7 @@ def train_engine(config: dict):
                     inference_only_detr=config["INFERENCE_ONLY_DETR"] if config["INFERENCE_ONLY_DETR"] is not None
                     else config["ONLY_DETR"],
                 )
+                set_optimizer_mode(optimizer, "train")
                 eval_metrics.sync()
                 logger.metrics(
                     log=f"[Eval epoch: {epoch}] ",
@@ -316,7 +329,8 @@ def train_engine(config: dict):
 
         logger.success(log=f"Finish training epoch {epoch}.")
         # Prepare for next step:
-        scheduler.step()
+        if scheduler is not None:
+            scheduler.step()
         # Single stop path: train_one_epoch reports when MAX_TRAIN_STEPS was
         # reached; the epoch loop must stop here (Bug1: previously the inner
         # break did not stop the outer epoch loop).

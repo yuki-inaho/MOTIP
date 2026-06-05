@@ -9,7 +9,6 @@ from torchvision.transforms import v2
 import torchvision.transforms as T
 from math import floor
 from PIL import Image
-from triton.language import dtype
 
 from utils.box_ops import box_xywh_to_xyxy, box_xyxy_to_cxcywh
 from .util import is_legal
@@ -593,7 +592,8 @@ def build_transforms(config: dict):
                     overflow_bbox=config["AUG_OVERFLOW_BBOX"]
                 ),
                 MultiRandomResize(sizes=config["AUG_RESIZE_SCALES"], max_size=config["AUG_MAX_SIZE"])
-            ])
+            ]),
+            p=1.0 - config.get("AUG_RANDOM_CROP_PROB", 0.5),
         ),
         MultiBoxXYXYtoCXCYWH(),
         MultiColorJitter(

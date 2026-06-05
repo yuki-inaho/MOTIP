@@ -1,0 +1,23 @@
+# Adopted AppleMOTS MOTIP pretraining condition.
+#
+# 60-step comparison on 2026-06-05:
+#   SL=20, interval=4: id_loss=5.6806, max_cuda=12646MB, time=1:42
+#   SL=20, interval=1: id_loss=5.6612, max_cuda=6455MB,  time=1:21
+#   SL=08, interval=4: id_loss=5.6334, max_cuda=2207MB,  time=0:34
+#
+# SL8/interval4 keeps BFT-style sparse temporal sampling while avoiding the
+# dense AppleMOTS memory spike. REL_PE_LENGTH and MISS_TOLERANCE remain 20 so
+# the official-BFT tracking modules are still structurally compatible.
+
+SUPER_CONFIG_PATH: ./configs/train_applemots_pseudomot_bft_official_schedulefree.yaml
+
+SAMPLE_LENGTHS: [8]
+SAMPLE_INTERVALS: [4]
+
+EPOCHS: 4
+MAX_TRAIN_STEPS:
+SAVE_CHECKPOINT_PER_EPOCH: 1
+MULTI_LAST_CHECKPOINTS: 1
+
+OUTPUTS_DIR: ./outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain
+EXP_NAME: applemots_pseudomot_bft_schedulefree_sl8_pretrain

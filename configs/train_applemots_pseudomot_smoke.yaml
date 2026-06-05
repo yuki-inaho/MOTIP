@@ -1,0 +1,22 @@
+SUPER_CONFIG_PATH: ./configs/train_tracklet_pseudomot_smoke.yaml
+
+# AppleMOTS converted from instance masks to MOTChallenge/PseudoMOT.
+DATA_ROOT: ./datasets/
+DATASETS: [PseudoMOT]
+DATASET_SPLITS: [train]
+PSEUDOMOT_SUB_DIR: AppleMOTSPseudoMOT
+PSEUDOMOT_LABEL_FILE_NAME: gt.txt
+PSEUDOMOT_ALLOW_EMPTY_FRAMES: False
+
+# AppleMOTS frames are dense and can contain many fruit instances. Keep this a
+# real MOTIP loop smoke while allowing >64 IDs in a short clip.
+SAMPLE_LENGTHS: [2]
+SAMPLE_INTERVALS: [1]
+NUM_ID_VOCABULARY: 256
+NUM_TRAINING_IDS: 256
+MAX_TRAIN_STEPS: 2
+EPOCHS: 1
+NUM_WORKERS: 0
+
+OUTPUTS_DIR: ./outputs/applemots_pseudomot_smoke
+EXP_NAME: applemots_pseudomot_smoke

@@ -1,0 +1,78 @@
+# Fine-tune on Optuna-retracked tomato pseudo labels with official BFT MOTIP
+# tracking weights transplanted into a tomato detector checkpoint.
+#
+# Why this exists:
+#   Earlier tomato runs only warm-started DETR; id_decoder / trajectory_modeling
+#   were effectively trained from scratch, and raw MOTIP IDs stayed frame-local.
+#   This config tests the missing warm-start hypothesis by using BFT's
+#   tracking-trained MOTIP modules plus BFT-style temporal sampling.
+#
+# BFT official-like sample settings:
+#   configs/r50_deformable_detr_motip_bft.yaml -> SAMPLE_LENGTHS=[20],
+#   SAMPLE_INTERVALS=[4] inherited from DanceTrack, REL_PE_LENGTH=20,
+#   MISS_TOLERANCE=20.
+#
+# Tomato retrack-optuna label scan:
+#   SL=20, interval=4 -> max clip-internal unique IDs = 446 at start frame 712.
+#   NUM_ID_VOCABULARY=512 keeps GenerateIDLabels from truncating.
+
+SUPER_CONFIG_PATH: ./configs/train_tracklet_pseudomot_full.yaml
+
+PSEUDOMOT_SUB_DIR: TomatoTrackletMOT_retrack_optuna
+PSEUDOMOT_LABEL_FILE_NAME: gt.txt
+PSEUDOMOT_ALLOW_EMPTY_FRAMES: False
+
+SAMPLE_STEPS: [0]
+SAMPLE_LENGTHS: [20]
+SAMPLE_INTERVALS: [4]
+LENGTH_PER_ITERATION:
+REL_PE_LENGTH: 20
+MISS_TOLERANCE: 20
+
+# Default to smaller aspect-preserving input for this L4 run. Original frames
+# are 800x600 (w x h, 4:3); shorter-edge 384 + max longer 512 yields 512x384,
+# both multiples of 32. Random crop is disabled to keep the aspect ratio.
+AUG_RESIZE_SCALES: [384]
+AUG_MAX_SIZE: 512
+AUG_RANDOM_RESIZE: [384]
+AUG_RANDOM_CROP_PROB: 0.0
+
+NUM_ID_VOCABULARY: 512
+# Keep the 512-class ID vocabulary needed for the retrack-optuna labels, but
+# cap active training IDs per clip for L4 23GB. Full 512 active IDs OOMed even at
+# 512x384 with AUG_NUM_GROUPS=1 during a 120-step preflight; 256 completed 120
+# steps with max_cuda_mem ~= 12.4GB. This is an explicit memory branch, not a
+# silent fallback.
+NUM_TRAINING_IDS: 256
+
+# Start from a full target checkpoint produced by
+# tools/transplant_motip_tracking_weights.py:
+#   - target base: tomato retrack-optuna checkpoint_40 (detector/tomato-specific
+#     compatible weights)
+#   - source overlay: official BFT trajectory_modeling + id_decoder, with vocab
+#     tensors copied by overlap + unknown row/column.
+RESUME_MODEL: ./pretrains/motip_bft_tracking_to_tomato_retrack_optuna_sl20.pth
+RESUME_OPTIMIZER: False
+RESUME_SCHEDULER: False
+SCHEDULER_MILESTONES: [999]
+
+# Keep official ID loss weight for the first BFT-transfer experiment. The only
+# trajectory-augmentation deviation is AUG_NUM_GROUPS=1: even with 384x512,
+# groups=6 and groups=3 both OOMed on L4 23GB with SL=20/vocab512.
+ID_LOSS_WEIGHT: 1.0
+AUG_NUM_GROUPS: 1
+
+# Match the official BFT MOTIP training schedule for the first full transfer
+# experiment. Use -u MAX_TRAIN_STEPS=60/EPOCHS=1/OUTPUTS_DIR=... for preflight.
+EPOCHS: 22
+SCHEDULER_MILESTONES: [16, 20]
+LR_WARMUP_EPOCHS: 2
+SAVE_CHECKPOINT_PER_EPOCH: 2
+EARLY_STOP: True
+EARLY_STOP_PATIENCE: 3
+EARLY_STOP_MIN_DELTA: 0.0
+EARLY_STOP_START_EPOCH: 2
+MAX_TRAIN_STEPS:
+
+OUTPUTS_DIR: ./outputs/tracklet_pseudomot_retrack_optuna_bft_official_ft
+EXP_NAME: tracklet_pseudomot_retrack_optuna_bft_official_ft

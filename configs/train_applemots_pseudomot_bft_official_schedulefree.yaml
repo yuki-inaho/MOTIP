@@ -1,0 +1,68 @@
+# AppleMOTS MOTIP pretraining with official-BFT-like tracking settings.
+#
+# This is the AppleMOTS counterpart of the tomato BFT transfer experiment:
+#   - official-like sampling: SAMPLE_LENGTHS=[20], SAMPLE_INTERVALS=[4]
+#   - official BFT tracking modules are transplanted by
+#     tools/transplant_motip_tracking_weights.py into RESUME_MODEL below
+#   - short-edge 384 / max 512 is intentionally retained for this L4 run
+#   - ScheduleFree is used for this first long-ish AppleMOTS condition because
+#     the earlier optimizer audit requested it and the implementation is present.
+#
+# AppleMOTS PseudoMOT scan:
+#   SL=20, interval=4 -> max clip-internal unique IDs = 254.
+#   NUM_ID_VOCABULARY=320 prevents GenerateIDLabels truncation with margin.
+
+SUPER_CONFIG_PATH: ./configs/train_tracklet_pseudomot_full.yaml
+
+DATA_ROOT: ./datasets/
+DATASETS: [PseudoMOT]
+DATASET_SPLITS: [train]
+PSEUDOMOT_SUB_DIR: AppleMOTSPseudoMOT
+PSEUDOMOT_LABEL_FILE_NAME: gt.txt
+PSEUDOMOT_ALLOW_EMPTY_FRAMES: False
+
+SAMPLE_STEPS: [0]
+SAMPLE_LENGTHS: [20]
+SAMPLE_INTERVALS: [4]
+LENGTH_PER_ITERATION:
+REL_PE_LENGTH: 20
+MISS_TOLERANCE: 20
+
+AUG_RESIZE_SCALES: [384]
+AUG_MAX_SIZE: 512
+AUG_RANDOM_RESIZE: [384]
+AUG_RANDOM_CROP_PROB: 0.0
+AUG_NUM_GROUPS: 1
+DETR_NUM_CHECKPOINT_FRAMES: 2
+
+NUM_ID_VOCABULARY: 320
+NUM_TRAINING_IDS: 256
+
+RESUME_MODEL: ./pretrains/motip_bft_tracking_to_applemots_sl20.pth
+RESUME_OPTIMIZER: False
+RESUME_SCHEDULER: False
+
+OPTIMIZER_TYPE: AdamWScheduleFree
+SCHEDULER_TYPE: none
+LR_WARMUP_EPOCHS: 0
+
+AMP_DTYPE: bf16
+EMA_ENABLED: True
+TENSORBOARD: True
+EARLY_STOP: True
+EARLY_STOP_PATIENCE: 3
+EARLY_STOP_MIN_DELTA: 0.0
+EARLY_STOP_START_EPOCH: 3
+
+# First AppleMOTS run is experimental pretraining rather than final production.
+# Use -u MAX_TRAIN_STEPS=.../EPOCHS=... for smoke and budgeted condition checks.
+EPOCHS: 12
+MAX_TRAIN_STEPS:
+SAVE_CHECKPOINT_PER_EPOCH: 2
+MULTI_LAST_CHECKPOINTS: 1
+
+INFERENCE_DATASET:
+INFERENCE_SPLIT:
+
+OUTPUTS_DIR: ./outputs/applemots_pseudomot_bft_official_schedulefree
+EXP_NAME: applemots_pseudomot_bft_official_schedulefree

@@ -109,12 +109,29 @@
   just infer-tracklet-retrack-optuna-ft 0 fp32  # retrack-optuna fine-tuned checkpoint_40で30FPS全frame推論
   just video-tracklet-retrack-optuna-ft 3 0     # retrack-optuna fine-tuned raw推論から3fps mp4のみ生成
   just compare-tracklet-retrack-optuna-ft       # Optuna疑似正解とfine-tune後raw出力をID proxy比較
+  just build-applemots-pseudomot                # /home/kasm-user/Desktop/APPLE_MOTS → datasets/AppleMOTSPseudoMOT
+  just build-applemots-coco                     # AppleMOTS → COCO bbox(category_id=1, MOTIP/inspection向け)
+  just build-applemots-coco-deim                # AppleMOTS → COCO bbox(category_id=0, DEIM num_classes=1向け)
+  just loader-applemots                         # AppleMOTS変換datasetのPseudoMOT loader smoke
+  just config-applemots-smoke                   # AppleMOTS 2-step smoke config主要キー表示
+  just train-applemots-smoke                    # AppleMOTS PseudoMOTで2-step training smoke
+  just transplant-applemots-bft-schedulefree    # 公式BFT tracking重み → AppleMOTS target checkpointへ移植
+  just train-applemots-bft-sl8-pretrain         # AppleMOTS SL8/interval4, BFT移植 + ScheduleFreeで4epoch pretrain
+  just transplant-applemots-to-tomato           # AppleMOTS pretrain tracking重み → tomato retrack-optuna targetへ移植
+  just train-tracklet-applemots-transfer-smoke  # AppleMOTS転移checkpointからtomato 60step smoke fine-tune
+  just infer-tracklet-applemots-transfer 0 fp32 # tomato全1219frame推論 → JSON/MOT txt
+  just video-tracklet-applemots-transfer 3 0    # AppleMOTS転移後の推論JSONから3fps mp4のみ生成
+  just compare-tracklet-applemots-transfer      # Optuna疑似正解とAppleMOTS転移後raw出力をID proxy比較
   ```
   - 推論/可視化は `tools/infer_tracklet.py`（`RuntimeTracker` を frame毎に回し `outputs/.../infer/tracks.json` と `tracks_mot.txt` を出力）/ `tools/visualize_tracks.py`（JSON+元画像→ bbox+ID 描画）。既定で `checkpoint_7.pth` の EMA 重みを使用。出力は `outputs/`（git外）。
   - 5FPS ID fine-tuneは `tools/convert_coco_tracklets_to_pseudomot.py --frame-stride 6` で `datasets/TomatoTrackletMOT_5fps`（git外）を作り、`configs/finetune_tracklet_pseudomot_5fps_id16.yaml` で学習する。既定推論checkpointはsaturation判定で採用した `checkpoint_39.pth`。旧新比較は `tools/compare_track_json.py` が `unique_track_ids / detections` と track length proxy を出す。
   - 5FPS fine-tune単体では推論IDが毎フレーム変わるため、`tools/retrack_detections.py` は `tracks.json` の `track_id` を使わず bbox/score/category を検出列として扱い、ByteTrack風のIoU+速度予測でIDを付け直す。採用設定は `track_thresh=0.80`, `new_track_thresh=0.95`, `match_thresh=0.10`, `max_age=60`。成果物は `outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/`（git外）で、`summary.json` は raw比 `unique_ids_per_detection: 1.0 -> 0.062644`, `track_length_max: 114`, `bottom_to_top_tracks: 101` を記録する。確認用動画は `outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/tracks.mp4`（1219 frames, 3fps, 800x600）。
   - Optuna探索は `tools/tune_retrack_detections.py`（`optuna>=4.9.0`）で実行する。現時点のbestは `track_thresh=0.85`, `low_thresh=0.4`, `new_track_thresh=0.85`, `match_thresh=0.01`, `low_match_thresh=0.01`, `max_age=240`, `nms_iou=0.55`, `velocity_weight=0.0`, `velocity_momentum=0.65`。成果物は `outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/`（git外）で、`summary.json` は `unique_ids_per_detection=0.027223`, `track_length_mean=36.733978`, `track_length_max=151`, `num_tracks_ge_120=18`, `long_upward_tracks=196`, `bottom_to_top_tracks=67` を記録する。確認用動画は `outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/tracks.mp4`。
   - Optuna best retrackを疑似正解化する場合は `tools/convert_track_json_to_pseudomot.py` で `datasets/TomatoTrackletMOT_retrack_optuna`（git外）を作る。`configs/finetune_tracklet_pseudomot_retrack_optuna.yaml` は `SAMPLE_LENGTHS=[8]`, `NUM_ID_VOCABULARY=224`, `RESUME_MODEL=checkpoint_39.pth`, `EPOCHS=41`。`checkpoint_40.pth` まで1epoch fine-tuneした結果、raw MOTIP推論は `25,712 detections / 25,712 unique IDs / track_length_mean=1.0` で、Optuna疑似正解の長trackletを内部IDへ転写できなかった。現時点の実用出力は `retrack_optuna/tracks.json` と `retrack_optuna/tracks.mp4` を優先する。
+  - AppleMOTSを試す場合は、raw zip `/home/kasm-user/Downloads/APPLE_MOTS.zip` を `/home/kasm-user/Desktop/APPLE_MOTS` に展開し、`tools/convert_apple_mots_to_pseudomot.py` で `datasets/AppleMOTSPseudoMOT`（git外）へ変換する。instance maskは16bit PNGで `category_id * 1000 + instance_id` のMOTSエンコード。変換後は train 6 sequences / 1147 frames / 62,899 objects、testing 6 sequences / 1051 frames / 46,068 objects。`configs/train_applemots_pseudomot_smoke.yaml` は `SAMPLE_LENGTHS=[2]`, `NUM_ID_VOCABULARY=256`, `MAX_TRAIN_STEPS=2` のsmoke用。
+  - DEIM用AppleMOTS COCOは `tools/convert_apple_mots_to_coco.py --category-id 0` で `datasets/AppleMOTSCOCO_DEIM`（git外）に作る。DEIM `CocoDetection(remap_mscoco_category=False)` は `num_classes=1` の場合 `category_id=0` を要求するため、`category_id=1` の汎用COCOとは分ける。DEIM smoke configは `(local)` `/workspace/Project/DEIM_sandbox/configs/deim_dfine/deim_hgnetv2_m_coco_applemots_smoke.yml`、retry0結果は bbox AP=0.216 / AP50=0.553 / AR100=0.317。
+  - AppleMOTS BFT pretrainは `configs/train_applemots_pseudomot_bft_schedulefree_sl8_pretrain.yaml`（SL8/interval4, short-edge 384, ScheduleFree, bf16, EMA, EarlyStop=True）を採用。`checkpoint_3.pth` は loss 8.0283 / detr_loss 5.5941 / id_loss 2.4342 で4epoch完走し、`outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/checkpoint_3.pth`（git外）にある。
+  - AppleMOTS pretrainをtomato retrack-optunaへ移植したcheckpointは `pretrains/motip_applemots_tracking_to_tomato_retrack_optuna_sl20.pth`（git外）。60step smoke後の推論成果物は `outputs/tracklet_pseudomot_retrack_optuna_applemots_bft_schedulefree_smoke/infer_30fps/`。`tracks.mp4` は1219 frames, 3fps, 136MB。比較では Optuna疑似正解 mean track length 36.73 / unique ratio 0.0272 に対し、AppleMOTS転移後raw MOTIPは mean track length 1.0 / unique ratio 1.0 で未改善。現時点の実用出力は引き続き `outputs/tracklet_pseudomot_5fps_id16/retrack_optuna/tracks.json` と `tracks.mp4` を優先する。
 - **依存ライブラリ:** torch 2.4.0+cu118 / torchvision / accelerate / tensorboard / einops / opencv-python / optuna / pycocotools / numpy<2 / pytest / ruff（詳細は `pyproject.toml` と `uv.lock`）。CUDA op: `models/ops`（`just build-ops`）。
 - **連絡先/責任者:** yoshikawa@inaho.co（yuki-inaho）。
 

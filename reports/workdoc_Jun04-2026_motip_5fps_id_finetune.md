@@ -104,6 +104,18 @@ converterに `frame_stride` を追加し、テストでframe再採番・annotati
 
 MOTIPの推論IDは使わず、`tracks.json` のbbox/scoreを検出列として扱い、ByteTrack/OC-SORT相当の後段trackerでIDを付け直す。複数パラメータを試し、raw推論よりID断片化が減ること、長いtrack/bottom-to-top候補が出ること、JSON/MOT txt/summary/mp4を再現可能に生成できることを確認する。
 
+### フェーズ 7: 公式MOTIP tracking事前重みの移植と公式BFT sample設定寄せfine-tune
+
+MOTIP raw IDが毎検出新規になる原因候補として、これまでDETR検出器だけをpretrainし、`id_decoder` / `trajectory_modeling` を公式tracking済みcheckpointからwarm-startしていなかった点を検証する。ユーザー指示により公式sourceはBFT checkpointを採用する。shape互換重みは直接コピーし、ID語彙shapeだけはoverlap/unknownを部分コピーできるCLIを追加する。sample length/interval/epoch/scheduler/warmupはBFT公式設定（`SAMPLE_LENGTHS=[20]`, `SAMPLE_INTERVALS=[4]`, `EPOCHS=22`, `SCHEDULER_MILESTONES=[16,20]`, `LR_WARMUP_EPOCHS=2`）へ寄せる。一方でユーザー追加指示により、画像入力はこのPC向けに短辺384（800x600原画像 -> 512x384、32倍数）を既定とし、L4 23GBでOOMする軌跡augmentationだけは実測に基づき明示的に縮退する。
+
+### フェーズ 8: DEIM由来optimizer分岐とL4実行可能性の確定
+
+`/workspace/Project/DEIM_sandbox/DEIM/engine/optim/optim.py` を参照し、Muon + auxiliary Adam と ScheduleFree AdamW をMOTIPのuv環境へ導入する。`uv add` で依存を固定し、`OPTIMIZER_TYPE` / `SCHEDULER_TYPE` による分岐を追加する。AdamW / Muon / ScheduleFree を同じBFT公式寄せconfig上で短期比較し、20stepでは改善が判断できない場合は「安定性確認のみ」として記録する。長めのpreflightでOOMする場合は、公式寄せの `SL20/interval4/shorter384/vocab512` は維持しつつ、`NUM_TRAINING_IDS` の上限を明示的に下げる条件分岐を採用する。これはサイレント切り詰めではなく、L4上での実行可能性を確保するための明示的なメモリ制約である。
+
+### フェーズ 9: AppleMOTSをMOTIP学習入力として整備する
+
+ユーザーが `/home/kasm-user/Downloads/APPLE_MOTS.zip` を取得済みのため、AppleMOTSのデータ構成とinstance mask形式を調査し、MOTIP既存の `PseudoMOT` loaderで読めるMOTChallenge風ディレクトリへ変換する。AppleMOTSは `train/testing`、各splitに `images/<seq>/*.png` と `instances/<seq>/*.png` を持ち、instance maskは16bit PNGで `category_id * 1000 + instance_id` のMOTSエンコードになっている。MOTIP本体に新loaderを増やすのではなく、bbox/track IDを `gt/gt.txt` に落とし、画像はraw展開先へのsymlinkとして容量を節約する。変換CLI、単体テスト、just target、smoke configを追加し、loader smokeと2-step training smokeまで確認する。
+
 ---
 
 ## 3. 作業チェックリスト
@@ -242,6 +254,120 @@ MOTIPの推論IDは使わず、`tracks.json` のbbox/scoreを検出列として�
 - [x] 🧪 **テスト**: 後段tracker関連pytest/ruff、必要に応じて全体pytest、`git diff --check` を実行する。
 - [x] 🛠 **エラー時対処**: 生成物がstageされそうなら除外し、`.gitignore` と `git check-ignore` を確認する。
 
+### フェーズ 7: 公式tracking重み移植
+
+### 手順 21: 公式checkpointとsample設定を確認する
+- [x] 🖐 **操作**: `docs/MODEL_ZOO.md` と `configs/r50_deformable_detr_motip_bft.yaml` を確認し、公式tracking checkpoint URL、local checkpoint path、`SAMPLE_LENGTHS`, `SAMPLE_INTERVALS`, `NUM_ID_VOCABULARY` を記録する。
+- [x] 🔎 **確認**: 公式tracking checkpointがlocalにある、またはURLからdownload可能である。既存トマトconfigがtracking重み未移植であることを記録する。
+- [x] 🧪 **テスト**: `manual_official_weight_inventory`。source checkpointのtop keysと `detr` / `trajectory_modeling` / `id_decoder` key数を確認する。
+- [x] 🛠 **エラー時対処**: local checkpointが無い場合はCLIの `--source-url` でdownloadし、partial fileは削除して再実行する。
+
+### 手順 22: tracking重み移植CLIと単体テストを実装する
+- [x] 🖐 **操作**: `tools/transplant_motip_tracking_weights.py` を追加し、source checkpoint、target config、target base checkpoint、include/exclude prefix、vocab overlap policy、download URL、report JSON、dry-runをサポートする。
+- [x] 🔎 **確認**: shape一致weightはコピー、ID語彙weightはoverlap + unknown列/行を部分コピー、shape不一致はreportに記録して黙ってfallbackしない。
+- [x] 🧪 **テスト**: `tests/test_transplant_motip_tracking_weights.py` を追加し、exact copy、vocab partial copy、mismatch skipを検証する。
+- [x] 🛠 **エラー時対処**: strict loadに失敗するcheckpointを出さないため、target model/base checkpointから完全なtarget stateを作ってから移植する。
+
+### 手順 23: 公式sample設定寄せfine-tune config/just targetを追加する
+- [x] 🖐 **操作**: `configs/finetune_tracklet_pseudomot_retrack_optuna_bft_official.yaml` とjust target群を追加する。
+- [x] 🔎 **確認**: BFT公式寄せの `SAMPLE_LENGTHS=[20]`, `SAMPLE_INTERVALS=[4]`, `PSEUDOMOT_SUB_DIR=TomatoTrackletMOT_retrack_optuna`, `RESUME_MODEL=<移植checkpoint>`, `AUG_NUM_GROUPS=3`, `AMP_DTYPE=bf16` である。clip内最大unique実測が `NUM_ID_VOCABULARY` 以下である。
+- [x] 🧪 **テスト**: `just config-tracklet-bft-official` と `just --list | rg 'bft|transplant'` が成功する。
+- [x] 🛠 **エラー時対処**: 公式sample設定がOOMまたはvocab不足なら、まず記録して停止し、ユーザー指示なしに別sample設定へ黙って変更しない。
+
+### 手順 24: 移植checkpointを生成し60step preflightする
+- [ ] 🖐 **操作**: `just transplant-motip-official-tracking` を実行し、続けて公式sample設定寄せconfigで60step preflightを実行する。
+- [ ] 🔎 **確認**: report JSONにコピー/部分コピー/skip件数が残り、preflightはfinite loss、OOMなし、strict resume成功である。
+- [ ] 🧪 **テスト**: `manual_official_tracking_preflight`。loss/id_loss/max_cuda_mem/checkpoint/logを記録する。
+- [ ] 🛠 **エラー時対処**: OOMならその事実を記録し、`AUG_NUM_GROUPS` 等のOOM対策は別DoDとして明示してから再試行する。
+
+### 手順 25: 公式tracking重み移植版を再学習し採用checkpointを決める
+- [ ] 🖐 **操作**: preflight成功後、公式sample設定寄せfine-tuneを実行する。
+- [ ] 🔎 **確認**: loss/id_lossが推移し、saturationまたは短期完走に基づいて採用checkpointを決める。
+- [ ] 🧪 **テスト**: `manual_official_tracking_train`。採用checkpoint、epoch、id_loss、終了理由を記録する。
+- [ ] 🛠 **エラー時対処**: 公式sample設定で継続困難なら未完了扱いにせず、停止理由と再開案を記録する。
+
+### 手順 26: 採用checkpointで推論・動画・比較を実行する
+- [ ] 🖐 **操作**: 採用checkpointで全1219 frame推論し、3fps mp4と比較JSONを生成する。
+- [ ] 🔎 **確認**: raw/5FPS/Optuna retrack/retrack-optuna fine-tune/official-tracking移植版のID proxy metricsを比較する。
+- [ ] 🧪 **テスト**: `manual_official_tracking_eval`。`unique_ids_per_detection`, `track_length_mean/max`, video metadataを記録する。
+- [ ] 🛠 **エラー時対処**: 改善未達なら「公式tracking移植でも未達」と明示し、次の仮説を記録する。
+
+### 手順 27: docs/reports更新、品質gate、commit/pushを行う
+- [ ] 🖐 **操作**: `docs/ONBOARDING.md` と本書/reports copyを更新し、pytest/ruff/git hygieneを実行してcommit/pushする。
+- [ ] 🔎 **確認**: 生成物はgit外、source/config/test/doc/report/justfileだけをstageする。`HEAD == origin/cu118` で終える。
+- [ ] 🧪 **テスト**: transplant関連pytest、必要範囲ruff、`git diff --check`、生成物混入grepがgreen。
+- [ ] 🛠 **エラー時対処**: push前にstaged file listを出し、checkpoint/report JSON/mp4などの生成物が入っていないことを確認する。
+
+### フェーズ 8: DEIM optimizer分岐と実行可能なBFT公式寄せ学習
+
+### 手順 28: DEIM optimizer実装と依存を導入する
+- [x] 🖐 **操作**: `/workspace/Project/DEIM_sandbox/DEIM/engine/optim/optim.py` を確認し、`models/optim.py`、`train.py`、`configs/train_tracklet_pseudomot_full.yaml`、optimizer別configを更新する。必要依存は `uv add` で追加する。
+- [x] 🔎 **確認**: `OPTIMIZER_TYPE=AdamW|AutoMuonWithAuxAdam|AdamWScheduleFree` と `SCHEDULER_TYPE=MultiStepLR|none` がconfigから選択できる。ScheduleFreeはtrain/eval mode切替があり、Muonはmatrix/4D paramをMuon、それ以外をaux Adamに分ける。
+- [x] 🧪 **テスト**: `uv run --no-sync pytest tests/test_optimizers.py -q` が成功する。
+- [x] 🛠 **エラー時対処**: 依存が無ければ `uv add schedulefree` と `uv add 'muon-optimizer @ git+https://github.com/KellerJordan/Muon@<commit>'` を実行し、`pyproject.toml`/`uv.lock` に固定する。MuonはMOTIPの名前別LR scaleを保持しないため、比較時に制約として記録する。
+
+### 手順 29: 短辺384既定のBFT公式寄せconfigを確定する
+- [x] 🖐 **操作**: `configs/finetune_tracklet_pseudomot_retrack_optuna_bft_official.yaml` を短辺384既定にし、公式BFT由来の `SAMPLE_LENGTHS=[20]`, `SAMPLE_INTERVALS=[4]`, `REL_PE_LENGTH=20`, `MISS_TOLERANCE=20`, `EPOCHS=22`, `SCHEDULER_MILESTONES=[16,20]`, `LR_WARMUP_EPOCHS=2`, `EARLY_STOP=True` を明示する。
+- [x] 🔎 **確認**: `just config-tracklet-bft-official` が短辺384、`AUG_MAX_SIZE=512`、random crop無効、`NUM_ID_VOCABULARY=512`、`RESUME_MODEL=pretrains/motip_bft_tracking_to_tomato_retrack_optuna_sl20.pth` を表示する。
+- [x] 🧪 **テスト**: `manual_bft_official_config_dump`。`just config-tracklet-bft-official`, `just config-tracklet-bft-official-muon`, `just config-tracklet-bft-official-schedulefree` が成功する。
+- [x] 🛠 **エラー時対処**: 公式BFT設定と異なる箇所は、短辺384・augmentation groups・training id capのように理由を明記し、黙って変更しない。
+
+### 手順 30: OOM分岐を実測し、実行可能なtraining-id capを決める
+- [x] 🖐 **操作**: `SL20/interval4/vocab512/shorter384` で `AUG_NUM_GROUPS=6`, `3`, `1` を順に試し、OOM/成功を記録する。`AUG_NUM_GROUPS=1` でも長めpreflightがOOMする場合は `NUM_TRAINING_IDS` を明示的に制限して再preflightする。
+- [x] 🔎 **確認**: 最終採用分岐はfinite loss、OOMなし、strict resume成功、`max_cuda_mem` がL4 23GB内に収まる。
+- [x] 🧪 **テスト**: `manual_bft_memory_branch_preflight`。少なくとも120stepのAdamW smokeでOOMしないことを確認する。
+- [x] 🛠 **エラー時対処**: `NUM_TRAINING_IDS=256` でもOOMなら224/192へ段階的に下げ、下げた値と理由を作業記録に残す。これでも失敗する場合はsample lengthを下げる前に停止し、公式寄せ設定のL4上限として報告する。
+
+### 手順 31: AdamW/Muon/ScheduleFreeを同条件で比較する
+- [x] 🖐 **操作**: 採用したtraining-id capでAdamW、Muon、ScheduleFreeを同じstep数だけ走らせ、loss/id_loss/detr_loss/max_cuda_mem/timeを比較する。
+- [x] 🔎 **確認**: ScheduleFreeまたはMuonがAdamWより明確に良い場合だけ採用し、同等なら安定性・既存LR scale維持の観点でAdamWを採用する。
+- [x] 🧪 **テスト**: `manual_optimizer_branch_compare`。比較表と各log pathを作業記録に残す。
+- [x] 🛠 **エラー時対処**: MuonはDEIM実装由来でMOTIPの名前別LR scaleを失うため、改善が不明瞭なら採用しない。ScheduleFreeはscheduler無し・mode切替必須なのでcheckpoint保存前後のtrain/eval切替を確認する。
+
+### 手順 32: 採用optimizerでBFT公式寄せfine-tuneを実行する
+- [ ] 🖐 **操作**: 採用configで本学習を起動し、early stopまたは時間枠内のsaturation判断で採用checkpointを決める。
+- [ ] 🔎 **確認**: 採用checkpoint、epoch、global_step、loss/id_loss、停止理由が記録される。
+- [ ] 🧪 **テスト**: `manual_bft_official_ft_train`。checkpoint path、log path、TensorBoard event、GPU解放を確認する。
+- [ ] 🛠 **エラー時対処**: lossがサチったら未完走でも採用/停止判断を明記する。OOMやNaNは失敗扱いにし、別条件へ進む前に作業記録を更新する。
+
+### 手順 33: 採用checkpointで推論・動画・比較を行う
+- [ ] 🖐 **操作**: `infer-tracklet-bft-official`, `video-tracklet-bft-official`, `compare-tracklet-bft-official` を採用checkpointで実行する。
+- [ ] 🔎 **確認**: `tracks.json`, `tracks_mot.txt`, `tracks.mp4`, comparison JSON が生成され、旧raw/Optuna retrack/retrack-optuna fine-tune/BFT移植版のID proxy metricsを比較できる。
+- [ ] 🧪 **テスト**: `manual_bft_official_eval`。video metadataは1219 frames, 3fps, 800x600である。
+- [ ] 🛠 **エラー時対処**: ID改善未達なら未達と明記し、次仮説（ID decoder teacher forcing、label noise、query association設計、評価metric）を残す。
+
+### 手順 34: 作業書レビュー、docs/reports更新、commit/pushを行う
+- [ ] 🖐 **操作**: `review-written-workdoc` 観点で本書を自己レビューし、`reports/` copyと `docs/ONBOARDING.md` を更新し、pytest/ruff/git hygiene後にcommit/pushする。
+- [ ] 🔎 **確認**: 生成物はgit外、source/config/test/doc/report/justfileだけをstageする。`HEAD == origin/cu118` で終える。
+- [ ] 🧪 **テスト**: `pytest`/`ruff`/`git diff --check`/生成物混入grepがgreen。
+- [ ] 🛠 **エラー時対処**: reviewでBlocker/Majorが残る場合は修正してからpushする。checkpoint/report JSON/mp4はstageしない。
+
+### フェーズ 9: AppleMOTS dataset整備とsmoke
+
+### 手順 35: AppleMOTS archiveを展開し構成を調査する
+- [x] 🖐 **操作**: `date` 後、`/home/kasm-user/Downloads/APPLE_MOTS.zip` を確認し、`/home/kasm-user/Desktop/APPLE_MOTS` へ展開する。
+- [x] 🔎 **確認**: `train/testing` のsequence、image/instance件数、mask mode、画素値エンコード、余剰/欠損instanceを作業記録へ残す。
+- [x] 🧪 **テスト**: `manual_applemots_format_probe`。uv環境でPillow/numpyによりsample image/maskを読み、maskが16bit単一channelであることを確認する。
+- [x] 🛠 **エラー時対処**: zip未完了や空き容量不足なら展開を中止し、raw zip path・空き容量・不足量を記録する。
+
+### 手順 36: AppleMOTS -> PseudoMOT変換CLIとテストを追加する
+- [x] 🖐 **操作**: `tools/convert_apple_mots_to_pseudomot.py` と `tests/test_convert_apple_mots_to_pseudomot.py` を追加する。
+- [x] 🔎 **確認**: instance maskのbbox、category、track ID compact remap、余剰instance記録、symlink生成がsummaryに残る。
+- [x] 🧪 **テスト**: `UV_PROJECT_ENVIRONMENT=/home/kasm-user/Desktop/MOTIP/.venv uv run --no-sync pytest tests/test_convert_apple_mots_to_pseudomot.py -q` とruffがgreen。
+- [x] 🛠 **エラー時対処**: mask値がMOTSエンコードでない場合は暗黙推定せず、明示エラーとして扱う。
+
+### 手順 37: AppleMOTS PseudoMOT datasetとjust targetを整備する
+- [x] 🖐 **操作**: `justfile` に `build-applemots-pseudomot`, `loader-applemots`, `config-applemots-smoke`, `train-applemots-smoke` を追加し、変換を実行する。
+- [x] 🔎 **確認**: `datasets/AppleMOTSPseudoMOT` に `train/testing` が生成され、画像は `/home/kasm-user/Desktop/APPLE_MOTS` へのsymlinkである。
+- [x] 🧪 **テスト**: `just build-applemots-pseudomot` と `just loader-applemots` が成功し、train 6 sequences / 1147 framesを返す。
+- [x] 🛠 **エラー時対処**: 画像拡張子は`.jpg`名のsymlinkだが実体はPNGである。PILで読めない場合はcopy/変換方針を明示して再生成する。
+
+### 手順 38: AppleMOTS smoke configで学習ループを確認する
+- [x] 🖐 **操作**: `configs/train_applemots_pseudomot_smoke.yaml` を追加し、`just train-applemots-smoke` を実行する。
+- [x] 🔎 **確認**: configは `PSEUDOMOT_SUB_DIR=AppleMOTSPseudoMOT`, `SAMPLE_LENGTHS=[2]`, `NUM_ID_VOCABULARY=256`, `MAX_TRAIN_STEPS=2` で、DETR pretrainとCUDA opを使用する。
+- [x] 🧪 **テスト**: 2-step training smokeがfinite loss/OOMなしでexit 0し、`outputs/applemots_pseudomot_smoke/checkpoint_0.pth` が生成される。
+- [x] 🛠 **エラー時対処**: pretrain/op欠損時は `just prepare-tracklet-pretrain` / `just build-ops` を実行してから再試行する。ID語彙不足が出た場合はclip内最大uniqueを再計測して増やす。
+
 ---
 
 ## 4. 作業に使用するコマンド参考情報
@@ -289,6 +415,24 @@ just video-tracklet-5fps 3 0
 - [x] DoD-20: 採用checkpointで推論JSON/MOT txt/mp4を生成し、raw/Optuna retrack/fine-tune後のproxy metricsを比較する。
 - [x] DoD-21: Optuna/retrack-optuna fine-tune追加分のpytest/ruff/git hygieneがgreenである。
 - [x] DoD-22: docs/ONBOARDING.md と `reports/` workdoc copyを更新し、生成物混入なしでcommit/push後に `HEAD == origin/cu118` である。
+- [x] DoD-23: 公式BFT tracking checkpointのURL/local path、key構造、公式sample設定が作業記録に残る。
+- [x] DoD-24: tracking重み移植CLIがあり、exact/partial/skip挙動の単体テストとruffがgreenである。
+- [x] DoD-25: 公式sample設定寄せfine-tune config/just targetがあり、clip内最大uniqueとvocab整合が記録されている。
+- [ ] DoD-26: 移植checkpointとreport JSONが生成され、60step preflightがfinite/OOMなし/strict resume成功で通る。
+- [ ] DoD-27: 公式tracking重み移植版の再学習で採用checkpointと停止/完走判断が記録されている。
+- [ ] DoD-28: 採用checkpointで推論JSON/MOT txt/mp4を生成し、ID proxy metricsを既存結果と比較している。
+- [ ] DoD-29: docs/ONBOARDING.md と `reports/` workdoc copyが更新され、生成物混入なしでcommit/push後に `HEAD == origin/cu118` である。
+- [ ] DoD-30: 公式tracking移植で改善したか/未達かの結論と次アクション仮説が作業記録に残る。
+- [x] DoD-31: DEIM由来のMuon/ScheduleFree依存とoptimizer分岐がuv環境へ導入され、単体テストがgreenである。
+- [x] DoD-32: 短辺384をBFT公式寄せconfigの既定にし、公式BFT由来のsample/epoch/scheduler/warmup/early-stopとの差分が明示されている。
+- [x] DoD-33: L4でのOOM分岐（groups 6/3/1、必要ならtraining-id cap）が作業記録にあり、採用preflightがfinite/OOMなしで通っている。
+- [x] DoD-34: AdamW/Muon/ScheduleFreeの同条件比較が記録され、採用optimizerの理由が明確である。
+- [ ] DoD-35: 採用optimizer/configでBFT移植fine-tuneのcheckpoint、推論JSON/MOT txt、3fps mp4、comparison JSONが生成されている。
+- [ ] DoD-36: workdoc自己レビュー、docs/reports更新、品質gate、commit/pushが完了し、生成物混入なしで `HEAD == origin/cu118` である。
+- [x] DoD-37: AppleMOTS archiveの構成、maskエンコード、split/sequence/frame/object件数が作業記録に残っている。
+- [x] DoD-38: AppleMOTS -> PseudoMOT変換CLIと単体テストが追加され、pytest/ruffがgreenである。
+- [x] DoD-39: `datasets/AppleMOTSPseudoMOT` が生成され、MOTIP既存 `PseudoMOT` loaderでtrain splitを読める。
+- [x] DoD-40: AppleMOTS smoke config/just targetが追加され、2-step training smokeがfinite/OOMなしで成功している。
 
 ---
 
@@ -362,9 +506,33 @@ just video-tracklet-5fps 3 0
 | `2026-06-05` | `01:40:09 UTC+0000` | `Codex統括` | retrack-optuna fine-tune後の推論・動画・比較 | ✅DoD-20完了。`just infer-tracklet-retrack-optuna-ft 0 fp32` はexit 0で、`outputs/tracklet_pseudomot_retrack_optuna_ft/infer_30fps/tracks.json` と `tracks_mot.txt` を生成。結果は frames 1219, detections 25,712, unique IDs 25,712, `track_length_mean=1.0` で、MOTIP raw IDは依然として毎検出新規。`just video-tracklet-retrack-optuna-ft 3 0` は `tracks.mp4` 142,911,908 bytes, 1219 frames, 3fps, 800x600を生成。`just compare-tracklet-retrack-optuna-ft` によるOptuna疑似正解との比較は、Optuna側: detections 30,379, unique IDs 827, `unique_ids_per_detection=0.027223`, `track_length_mean=36.733978`, max 151, tracks>=60 104, tracks>=120 18, long_upward 196, bottom_to_top 67。fine-tune後raw側: detections 25,712, unique IDs 25,712, `unique_ids_per_detection=1.0`, `track_length_mean=1.0`。結論: 後段tracker自体は長trackletを作るが、それを1epochの疑似正解fine-tuneでMOTIPの内部ID headへ転写することはできなかった。実用出力としてはOptuna retrack JSON/mp4を採用し、MOTIP側は追加設計（ID loss/decoder/teacher forcing/label noise対策）が必要。 |
 | `2026-06-05` | `01:40:09 UTC+0000` | `Codex統括` | Optuna/retrack-optuna追加分の品質gate | ✅DoD-21完了。関連テスト `pytest tests/test_retrack_detections.py tests/test_tune_retrack_detections.py tests/test_track_json_pseudomot_conversion.py -q` は `6 passed in 0.56s`。`ruff check tools/retrack_detections.py tools/tune_retrack_detections.py tools/convert_track_json_to_pseudomot.py tests/test_retrack_detections.py tests/test_tune_retrack_detections.py tests/test_track_json_pseudomot_conversion.py` はAll checks passed。`git diff --check` はexit 0。生成物混入確認 `git ls-files | rg '^(outputs|datasets|pretrains)/|\\.pth$|\\.mp4$|events\\.out|^\\.venv/'` は空。全体 `pytest tests/ -q` は `49 passed, 8 warnings`（既存CLI override warning）。 |
 | `2026-06-05` | `01:44:42 UTC+0000` | `Codex統括` | Optuna/retrack-optuna追加分のcommit & push | ✅DoD-22完了。stage対象は `configs/finetune_tracklet_pseudomot_retrack_optuna.yaml`, `docs/ONBOARDING.md`, `justfile`, `pyproject.toml`, `uv.lock`, `reports/workdoc_Jun04-2026_motip_5fps_id_finetune.md`, `tests/test_track_json_pseudomot_conversion.py`, `tests/test_tune_retrack_detections.py`, `tools/convert_track_json_to_pseudomot.py`, `tools/tune_retrack_detections.py` の10ファイルのみ。staged生成物grepは空。commit `64f3c50 Add optuna retracking pseudo-label workflow` を作成し、`git push origin cu118` 成功。`git rev-list --left-right --count HEAD...@{u}` は `0 0`、`git status --short --branch` は `## cu118...origin/cu118`。生成物は `outputs/`, `datasets/`, checkpoint/mp4としてgit外に残存。 |
+| `2026-06-05` | `01:57:47 UTC+0000` | `Codex統括` | 追加フェーズ開始: 公式MOTIP tracking事前重み移植 | 🔄開始。ユーザー指示により、公式DanceTrack等のtracking済み事前重みから `trajectory_modeling` / `id_decoder` を柔軟に移植できるCLIを作り、さらにsample length/intervalを公式設定（`SAMPLE_LENGTHS=[30]`, `SAMPLE_INTERVALS=[4]`）へ寄せて再学習する。作業対象は `/home/kasm-user/Desktop/MOTIP`, branch `cu118`, `git status` は `## cu118...origin/cu118`。学習系プロセスは無し（MDA viewerのみ別プロセス）。 |
+| `2026-06-05` | `02:00:48 UTC+0000` | `Codex統括` | 方針修正: BFTベース採用 | ✅方針更新。ユーザー指示「BFTべーすがいいかな」により、公式tracking sourceはDanceTrackではなくBFT checkpointへ切替。`docs/MODEL_ZOO.md` 上のBFT checkpoint URLは `https://github.com/MCG-NJU/MOTIP/releases/download/v0.1/r50_deformable_detr_motip_bft.pth`、BFT DETR pretrain URLは `https://github.com/MCG-NJU/MOTIP/releases/download/v0.1/r50_deformable_detr_coco_bft.pth`。公式BFT configは `SUPER_CONFIG_PATH=./configs/r50_deformable_detr_motip_dancetrack.yaml`, `SAMPLE_LENGTHS=[20]`, `SAMPLE_INTERVALS=[4]`（継承）, `REL_PE_LENGTH=20`, `MISS_TOLERANCE=20`, `EPOCHS=22`。現時点でlocal BFT checkpointは未存在のためCLI download機能で取得する。 |
+| `2026-06-05` | `02:00:48 UTC+0000` | `Codex統括` | BFT公式sample設定のID語彙再測定 | ✅確認。`TomatoTrackletMOT_retrack_optuna` で `SAMPLE_LENGTHS=[20]`, `SAMPLE_INTERVALS=[4]` のclip内最大uniqueは446（start frame 712）。切り詰め防止のため公式BFTの `NUM_ID_VOCABULARY=50` は使わず、target側は `NUM_ID_VOCABULARY=NUM_TRAINING_IDS=512` とする。公式BFTの `id_decoder.word_to_embed` / `embed_to_word_layers.*` はoverlap 50 + unknownを部分コピーする。 |
+| `2026-06-05` | `02:00:48 UTC+0000` | `Codex統括` | 手順22完了: tracking重み移植CLIと単体テスト | ✅DoD-24完了。`tools/transplant_motip_tracking_weights.py` を追加。source URL download、target config build、target base checkpointの互換copy、公式tracking prefix copy、ID vocab overlap/unknown copy、shape mismatch skip、report JSON、dry-runを実装。`tests/test_transplant_motip_tracking_weights.py` を追加し、`UV_PROJECT_ENVIRONMENT=/home/kasm-user/Desktop/MOTIP/.venv uv run --no-sync pytest tests/test_transplant_motip_tracking_weights.py -q` は `4 passed in 2.17s`。`ruff check tools/transplant_motip_tracking_weights.py tests/test_transplant_motip_tracking_weights.py` はAll checks passed。 |
+| `2026-06-05` | `02:00:48 UTC+0000` | `Codex統括` | 手順23完了: BFT公式sample寄せconfig/just target追加 | ✅DoD-25完了。`configs/finetune_tracklet_pseudomot_retrack_optuna_bft_official.yaml` を追加。親は `train_tracklet_pseudomot_full.yaml`、datasetは `TomatoTrackletMOT_retrack_optuna`、BFT公式sample寄せで `SAMPLE_LENGTHS=[20]`, `SAMPLE_INTERVALS=[4]`, `REL_PE_LENGTH=20`, `MISS_TOLERANCE=20`。clip内最大unique 446に対して `NUM_ID_VOCABULARY=NUM_TRAINING_IDS=512`。just targetは `transplant-motip-bft-tracking`, `config-tracklet-bft-official`, `train-tracklet-bft-official`, `infer-tracklet-bft-official`, `video-tracklet-bft-official`, `compare-tracklet-bft-official`。`just --list | rg 'bft|transplant'` は6 target表示、`just config-tracklet-bft-official` は主要キーを正しく表示。 |
+| `2026-06-05` | `02:07:09 UTC+0000` | `Codex統括` | 手順21完了: BFT checkpoint取得・構造確認 | ✅DoD-23完了。`just transplant-motip-bft-tracking` の初回実行で `outputs/r50_deformable_detr_motip_bft/r50_deformable_detr_motip_bft.pth` をGitHub releaseからdownload（677M）。BFT source checkpoint top keysは `model`, `optimizer`, `scheduler`, `states`、model key数は719で、prefix内訳は `detr=597`, `trajectory_modeling=12`, `id_decoder=110`。代表shapeは `id_decoder.word_to_embed.weight=(256,51)`, `id_decoder.embed_to_word_layers.0.weight=(51,256)`, `id_decoder.rel_pos_embeds=(6,20,16)`。 |
+| `2026-06-05` | `02:07:09 UTC+0000` | `Codex統括` | BFT移植checkpoint生成 | ✅移植生成成功。`pretrains/motip_bft_tracking_to_tomato_retrack_optuna_sl20.pth` 233M と `pretrains/motip_bft_tracking_to_tomato_retrack_optuna_sl20_report.json` 285Kを生成。report summary: target_baseから `copied_exact=711`, `copied_partial=7`, `skipped=1`（`id_decoder.rel_pos_embeds` はbase 30長 vs target 20長でskip）、BFT公式trackingから `copied_exact=115`, `copied_partial=7`, `skipped=0`, `outside_include=597`。BFT側の `rel_pos_embeds=(6,20,16)` はtarget shape一致で上書き済み。 |
+| `2026-06-05` | `02:39:23 UTC+0000` | `Codex統括` | BFT公式寄せ設定の再整理 | ✅確認。ユーザー指示により短辺384を既定とする。公式BFT configは `SL20/interval4/EPOCHS22/milestones[16,20]/LR_WARMUP_EPOCHS=2`。MOTIP側configへ `AUG_RESIZE_SCALES=[384]`, `AUG_MAX_SIZE=512`, `AUG_RANDOM_CROP_PROB=0.0`, `LR_WARMUP_EPOCHS=2`, `EARLY_STOP=True` を明示。Muon分岐はDEIM実装のgroup別LRを既存warmupが上書きするため `LR_WARMUP_EPOCHS=0` とした。 |
+| `2026-06-05` | `02:39:23 UTC+0000` | `Codex統括` | DEIM optimizer導入状況 | ✅DoD-31確認。`uv add schedulefree==1.4.1` と `uv add 'muon-optimizer @ git+https://github.com/KellerJordan/Muon@f98f1cacc0263b04290753e32be8d498c1efc806'` 済み。`models/optim.py` はDEIMのMuon実装を移植し、`train.py` は `OPTIMIZER_TYPE`/`SCHEDULER_TYPE` を使う。単体テスト `tests/test_optimizers.py` は3 testsでAdamW/ScheduleFree/Muon分岐を確認済み。 |
+| `2026-06-05` | `02:39:23 UTC+0000` | `Codex統括` | BFT公式寄せ短辺384のOOM実測 | ⚠️条件分岐が必要。`SL20/interval4/vocab512/shorter384` で `AUG_NUM_GROUPS=6` は初step OOM（16.15GiB追加要求）、`groups=3` も初step OOM（8.08GiB追加要求）。`groups=1` は20step smokeで成功したが、120step AdamWではstep20後にID decoder softmaxで3.23GiB追加要求しOOM。結論: 短辺384でも `NUM_TRAINING_IDS=512` はL4 23GBで長めpreflight不可。次分岐として `NUM_TRAINING_IDS=256` を明示的に試す。 |
+| `2026-06-05` | `02:39:23 UTC+0000` | `Codex統括` | 20step optimizer比較の中間結果 | ⚠️改善判断は未確定。AdamW/Muon/ScheduleFreeはいずれも20stepでは `loss=9.2555`, `detr_loss=4.7280`, `id_loss=4.5275`, `max_cuda_mem≈19850MB` と同等。20stepは短すぎ、特にAdamWはwarmup中なので「改善あり」とは言えない。次にtraining-id cap後の長めpreflightで比較する。 |
+| `2026-06-05` | `02:53:17 UTC+0000` | `Codex統括` | 手順30完了: `NUM_TRAINING_IDS=256` 120step preflight | ✅DoD-33完了。`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True ... train.py --config-path configs/finetune_tracklet_pseudomot_retrack_optuna_bft_official.yaml -u NUM_TRAINING_IDS=256 MAX_TRAIN_STEPS=120 EPOCHS=1 OUTPUTS_DIR=./outputs/tracklet_pseudomot_retrack_optuna_bft_official_adamw_cap256_120 ...` はexit 0。strict resume成功、BFT移植checkpoint使用、epoch0 global_step 120で停止。所要 `0:10:15`、最終 `loss=8.9002`, `detr_loss=4.3664`, `id_loss=4.5339`, `max_cuda_mem(MB)=12377.4609`。`configs/finetune_tracklet_pseudomot_retrack_optuna_bft_official.yaml` の既定 `NUM_TRAINING_IDS` を256へ更新。 |
+| `2026-06-05` | `03:15:17 UTC+0000` | `Codex統括` | 手順31完了: AdamW/Muon/ScheduleFree 120step比較 | ✅DoD-34完了。同じ `SL20/interval4/shorter384/vocab512/training_ids256/BFT移植checkpoint` で比較。AdamW: `0:10:15`, `loss=8.9002`, `detr_loss=4.3664`, `id_loss=4.5339`, `max_cuda=12377MB`。ScheduleFree: `0:10:16`, `loss=7.9952`, `detr_loss=3.8039`, `id_loss=4.1913`, `max_cuda=12377MB`。Muon: `0:10:27`, `loss=11.2703`, `detr_loss=7.0443`, `id_loss=4.2260`, `max_cuda=12152MB`。MuonはID lossだけAdamWより低いが検出損失を大きく壊すため不採用。ScheduleFreeは総loss/detr_loss/id_lossすべてAdamWより良く、採用optimizerとする。 |
+| `2026-06-05` | `03:16:21 UTC+0000` | `Codex統括` | 手順32開始: ScheduleFree採用でBFT公式寄せ本学習起動 | 🔄実行中。`just train-tracklet-bft-official-schedulefree` を起動。設定は `SL20/interval4/shorter384/AUG_MAX_SIZE=512/AUG_NUM_GROUPS=1/NUM_ID_VOCABULARY=512/NUM_TRAINING_IDS=256/AdamWScheduleFree/SCHEDULER_TYPE=none/EPOCHS=22/EARLY_STOP=True`。出力先は `outputs/tracklet_pseudomot_retrack_optuna_bft_official_schedulefree_ft`。ログ初期化、PseudoMOT loader、DETR pretrain load、BFT移植checkpoint resume、EMA、early stop有効化まで成功。 |
+| `2026-06-05` | `04:01:05 UTC+0000` | `Codex統括` | 行動カウントリセット時の本学習監視 | 🔄継続中。epoch0 step520/1200まで進行。直近平均は `loss=7.4958`, `detr_loss=3.3915`, `id_loss=4.1043`, `max_cuda_mem(MB)=12385.5215`。GPU processは約14.5GB使用、util 100%。OOM/NaNなし。直近stepでは `id_loss` が3.8〜4.0台も出ており、120step smokeより学習が進んでいる。最初のcheckpointはepoch1終了時（`SAVE_CHECKPOINT_PER_EPOCH=2`）まで未生成。 |
+| `2026-06-05` | `04:27:15 UTC+0000` | `Codex統括` | ID loss停滞理由の中間分析 | 🔎ユーザー質問対応。epoch0 step840/1200時点で平均 `loss=7.3554`, `detr_loss=3.2266`, `id_loss=4.1288`。ID lossは開始時4.44から少し下がったが4.1前後で停滞。主因候補は、(1) Optuna/ByteTrack疑似正解のIDノイズ、(2) L4メモリ制約で `NUM_TRAINING_IDS=256` に明示制限しておりclip内最大unique 446を全件同時学習できないこと、(3) BFT事前tracking重みは鳥/自然画像ドメインでトマト密集シーンと外観・運動が異なること、(4) 公式寄せの `SL20/interval4` でも短辺384かつBBOX外観特徴が小さく、似た果実同士の識別信号が弱いこと。対策候補は教師trackletの高信頼filter、`NUM_TRAINING_IDS` 上限緩和/勾配蓄積、ID loss重みの段階的増加、DETR凍結/ID側のみ短期学習。 |
+| `2026-06-05` | `04:29:29 UTC+0000` | `Codex統括` | ユーザー指示による一時中断・情報freeze | ⏸️中断完了。`date` 確認後、ScheduleFree BFT公式寄せ本学習をSIGTERMで停止。中断直前の最新logは epoch0 step880/1200、平均 `loss=7.3524`, `detr_loss=3.2100`, `id_loss=4.1424`, `max_cuda_mem(MB)=12387.2393`。保存設定は `SAVE_CHECKPOINT_PER_EPOCH=2` のため、epoch1終了前でcheckpointは未生成。残存成果物は `outputs/tracklet_pseudomot_retrack_optuna_bft_official_schedulefree_ft/train/config.yaml` と `train/log.txt` のみ。停止後GPUは `1 MiB used / 22563 MiB free / util 0%`、学習processなし。手順32/DoD-35/DoD-36は未完了のままfreeze。再開時はこのrunを最初からやり直すか、`SAVE_CHECKPOINT_PER_EPOCH=1` または `MAX_TRAIN_STEPS` 付きで短期checkpoint保存を優先する。 |
+| `2026-06-05` | `04:35:01 UTC+0000` | `Codex統括` | AppleMOTS作業開始・前提確認 | 🔄ユーザー指示によりAppleMOTSをMOTIP学習へ使えるよう整備開始。入力は `/home/kasm-user/Downloads/APPLE_MOTS.zip` 5.3G、空き容量は46G。学習/変換processは無し、GPUは `1 MiB used / 22563 MiB free / util 0%`。raw展開先は `/home/kasm-user/Desktop/APPLE_MOTS`、PseudoMOT変換先は `datasets/AppleMOTSPseudoMOT` とする。 |
+| `2026-06-05` | `04:40:00 UTC+0000` | `Codex統括` | 手順35完了: AppleMOTS構成・mask形式調査 | ✅DoD-37完了。zipは `train` 6系列（0000-0005）/ `testing` 6系列（0006,0007,0008,0010,0011,0012）で、各splitに `images/<seq>/*.png` と `instances/<seq>/*.png` を持つ。sample imageは RGB 1296x972、instance maskは `I;16` のuint16単一channel。非0画素値は例として `1000..1287` で、MOTS系 `category_id * 1000 + instance_id` エンコードと判断。`testing/0010` だけ画像に対応しない余剰instance `000096.png` が1枚あり、画像欠損は無し。rawは `/home/kasm-user/Desktop/APPLE_MOTS` へ展開済み、サイズ5.6G。 |
+| `2026-06-05` | `04:41:00 UTC+0000` | `Codex統括` | 手順36完了: AppleMOTS -> PseudoMOT変換CLI追加 | ✅DoD-38完了。`tools/convert_apple_mots_to_pseudomot.py` を追加。16bit instance maskをbboxへ変換し、categoryは `encoded_id // 1000`、track IDはsequence内compact remap、score=1.0、visibility=mask_area/bbox_areaとして `gt/gt.txt` を生成する。画像は `img1/00000001.jpg` 名でraw PNGへ絶対symlinkし、PILがheaderで読む。`tests/test_convert_apple_mots_to_pseudomot.py` を追加し、bbox/track remap/symlink/余剰instance記録を固定。`pytest tests/test_convert_apple_mots_to_pseudomot.py -q` は `2 passed`、`ruff check tools/convert_apple_mots_to_pseudomot.py tests/test_convert_apple_mots_to_pseudomot.py` はAll checks passed。新規依存追加は不要（Pillow/numpyは既にuv環境に存在）。 |
+| `2026-06-05` | `04:41:40 UTC+0000` | `Codex統括` | 手順37完了: AppleMOTS PseudoMOT生成・loader検証 | ✅DoD-39完了。`justfile` に `build-applemots-pseudomot`, `loader-applemots`, `config-applemots-smoke`, `train-applemots-smoke` を追加。`just build-applemots-pseudomot` はexit 0。summary: train 6 sequences / 1147 frames / 62,899 objects / 1,613 tracks / empty 0、testing 6 sequences / 1051 frames / 46,068 objects / 1,396 tracks / empty 0。最大objects/frameは137。`SL=2/4/8/16/20` のtrain clip内最大uniqueは `137/142/152/170/181`。`just loader-applemots` は `PseudoMOT.train, 6 sequences, 1147 frames.` と `samples 1141` を返した。 |
+| `2026-06-05` | `04:42:10 UTC+0000` | `Codex統括` | 手順38完了: AppleMOTS 2-step training smoke | ✅DoD-40完了。`configs/train_applemots_pseudomot_smoke.yaml` を追加。configは `PSEUDOMOT_SUB_DIR=AppleMOTSPseudoMOT`, `SAMPLE_LENGTHS=[2]`, `SAMPLE_INTERVALS=[1]`, `NUM_ID_VOCABULARY=256`, `NUM_TRAINING_IDS=256`, `MAX_TRAIN_STEPS=2`, `OUTPUTS_DIR=./outputs/applemots_pseudomot_smoke`。CUDA op module import成功、`pretrains/r50_deformable_detr_coco_dancetrack.pth` も存在。`just train-applemots-smoke` はexit 0で、DETR pretrain load成功、2 step後に `MAX_TRAIN_STEPS=2` で正常停止。最終logは `loss=43.1256`, `detr_loss=37.0708`, `id_loss=6.0548`, `max_cuda_mem(MB)=1062.7295`。`outputs/applemots_pseudomot_smoke/checkpoint_0.pth` 678M、`train/config.yaml`, `train/log.txt` を生成。 |
+| `2026-06-05` | `04:43:49 UTC+0000` | `Codex統括` | AppleMOTS整備作業のfreeze記録 | ✅AppleMOTSについては「データ構成調査」「PseudoMOT変換」「既存loader接続」「2-step学習smoke」まで完了。未実施は本格学習、AppleMOTS用のBFT移植fine-tune、docs/ONBOARDING追記、commit/push。現時点の変更はsource/config/test/justfile/workdoc/report更新と、git外生成物 `/home/kasm-user/Desktop/APPLE_MOTS`, `datasets/AppleMOTSPseudoMOT`, `outputs/applemots_pseudomot_smoke`。 |
+| `2026-06-05` | `04:49:18 UTC+0000` | `Codex統括` | AppleMOTS対象の最終品質確認 | ✅成功。Pillow 13向けdeprecation warningを避けるため、テスト側のmask生成を `Image.fromarray(mask)` に修正。`UV_PROJECT_ENVIRONMENT=/home/kasm-user/Desktop/MOTIP/.venv uv run --no-sync pytest tests/test_convert_apple_mots_to_pseudomot.py -q` は `2 passed in 0.20s`（警告なし）。`ruff check tools/convert_apple_mots_to_pseudomot.py tests/test_convert_apple_mots_to_pseudomot.py` はAll checks passed。`git diff --check` はexit 0。 |
 
 ## 7. サブエージェントロスター
 
 | agent_id | name | scope | workspace | branch_or_context | allowed_actions | forbidden_actions | status | last_update | evidence_returned |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
-| local | Codex統括 | 実装・検証・記録・commit/push | `/home/kasm-user/Desktop/MOTIP` | `cu118` | source/config/test/doc/justfile編集、uv/just実行、生成物作成、commit/push | 生成物のgit追加、旧成果物削除、暗黙fallback | active | `2026-06-04 13:55:53 UTC+0000` | 本書 |
+| local | Codex統括 | 実装・検証・記録・commit/push | `/home/kasm-user/Desktop/MOTIP` | `cu118` | source/config/test/doc/justfile編集、uv/just実行、生成物作成、commit/push | 生成物のgit追加、旧成果物削除、暗黙fallback | active | `2026-06-05 04:43:49 UTC+0000` | 本書、`datasets/AppleMOTSPseudoMOT/conversion_summary.json`, `outputs/applemots_pseudomot_smoke/train/log.txt` |

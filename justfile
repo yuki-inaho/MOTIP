@@ -9,7 +9,22 @@ tracklet_config := "configs/train_tracklet_pseudomot_smoke.yaml"
 tracklet_full_config := "configs/train_tracklet_pseudomot_full.yaml"
 tracklet_5fps_config := "configs/finetune_tracklet_pseudomot_5fps_id16.yaml"
 tracklet_retrack_optuna_config := "configs/finetune_tracklet_pseudomot_retrack_optuna.yaml"
+tracklet_bft_official_config := "configs/finetune_tracklet_pseudomot_retrack_optuna_bft_official.yaml"
+tracklet_bft_official_muon_config := "configs/finetune_tracklet_pseudomot_retrack_optuna_bft_official_muon.yaml"
+tracklet_bft_official_schedulefree_config := "configs/finetune_tracklet_pseudomot_retrack_optuna_bft_official_schedulefree.yaml"
+applemots_raw := "/home/kasm-user/Desktop/APPLE_MOTS"
+applemots_dataset := "datasets/AppleMOTSPseudoMOT"
+applemots_coco_dataset := "datasets/AppleMOTSCOCO"
+applemots_coco_deim_dataset := "datasets/AppleMOTSCOCO_DEIM"
+applemots_smoke_config := "configs/train_applemots_pseudomot_smoke.yaml"
+applemots_bft_schedulefree_config := "configs/train_applemots_pseudomot_bft_official_schedulefree.yaml"
+applemots_bft_sl8_pretrain_config := "configs/train_applemots_pseudomot_bft_schedulefree_sl8_pretrain.yaml"
+applemots_bft_sl8_pretrain_ckpt := "outputs/applemots_pseudomot_bft_schedulefree_sl8_pretrain/checkpoint_3.pth"
+applemots_to_tomato_tracking_pretrain := "pretrains/motip_applemots_tracking_to_tomato_retrack_optuna_sl20.pth"
+applemots_to_tomato_tracking_report := "reports/motip_applemots_tracking_to_tomato_retrack_optuna_sl20_transfer_report.json"
 motip_dancetrack_ckpt := "outputs/r50_deformable_detr_motip_dancetrack/r50_deformable_detr_motip_dancetrack.pth"
+motip_bft_ckpt := "outputs/r50_deformable_detr_motip_bft/r50_deformable_detr_motip_bft.pth"
+motip_bft_url := "https://github.com/MCG-NJU/MOTIP/releases/download/v0.1/r50_deformable_detr_motip_bft.pth"
 tracklet_detr_pretrain := "pretrains/r50_deformable_detr_coco_dancetrack.pth"
 
 sync:
@@ -68,6 +83,27 @@ build-tracklet-pseudomot-retrack-optuna:
         --output-root "{{tracklet_retrack_optuna_dataset}}" --sequence-name nyx660_jun04_retrack_optuna \
         --split train --frame-rate 30
 
+build-applemots-pseudomot:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/convert_apple_mots_to_pseudomot.py \
+        --applemots-root "{{applemots_raw}}" --output-root "{{applemots_dataset}}" \
+        --splits train testing --frame-rate 30
+
+build-applemots-coco:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/convert_apple_mots_to_coco.py \
+        --applemots-root "{{applemots_raw}}" --output-root "{{applemots_coco_dataset}}" \
+        --splits train testing
+
+build-applemots-coco-deim:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/convert_apple_mots_to_coco.py \
+        --applemots-root "{{applemots_raw}}" --output-root "{{applemots_coco_deim_dataset}}" \
+        --splits train testing --category-id 0
+
+summary-applemots-coco:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'import json; from pathlib import Path; s=json.loads(Path("{{applemots_coco_dataset}}/conversion_summary.json").read_text()); print(json.dumps(s["by_split"], indent=2)); print("train_ann", s["split_summaries"][0]["ann_file"]); print("testing_ann", s["split_summaries"][1]["ann_file"])'
+
+summary-applemots-coco-deim:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'import json; from pathlib import Path; s=json.loads(Path("{{applemots_coco_deim_dataset}}/conversion_summary.json").read_text()); print(json.dumps(s["by_split"], indent=2)); print("category_id", s["category_id"]); print("train_ann", s["split_summaries"][0]["ann_file"]); print("testing_ann", s["split_summaries"][1]["ann_file"])'
+
 prepare-tracklet-pretrain:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python tools/extract_detr_pretrain.py --source "{{motip_dancetrack_ckpt}}" --output "{{tracklet_detr_pretrain}}"
 
@@ -82,6 +118,9 @@ loader-tracklet-5fps:
 
 loader-tracklet-retrack-optuna:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from data.joint_dataset import JointDataset; ds = JointDataset(data_root="./datasets", datasets=["PseudoMOT"], splits=["train"], pseudomot_sub_dir="TomatoTrackletMOT_retrack_optuna"); ds.set_sample_details(sample_length=8, sample_interval=1); print(ds.statistics()); print("samples", len(ds))'
+
+loader-applemots:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from data.joint_dataset import JointDataset; ds = JointDataset(data_root="./datasets", datasets=["PseudoMOT"], splits=["train"], pseudomot_sub_dir="AppleMOTSPseudoMOT"); ds.set_sample_details(sample_length=2, sample_interval=1); print(ds.statistics()); print("samples", len(ds))'
 
 train-tracklet-smoke:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run python train.py --config-path "{{tracklet_config}}"
@@ -98,6 +137,27 @@ config-tracklet-5fps:
 config-tracklet-retrack-optuna:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_retrack_optuna_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "RESUME_MODEL", "RESUME_OPTIMIZER", "RESUME_SCHEDULER", "EPOCHS", "SCHEDULER_MILESTONES", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "AUG_NUM_GROUPS", "ID_LOSS_WEIGHT", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
 
+# Show resolved key values for the BFT-official tracking-transfer fine-tune config.
+config-tracklet-bft-official:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_bft_official_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "REL_PE_LENGTH", "MISS_TOLERANCE", "AUG_RESIZE_SCALES", "AUG_MAX_SIZE", "AUG_RANDOM_CROP_PROB", "AUG_NUM_GROUPS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "OPTIMIZER_TYPE", "SCHEDULER_TYPE", "LR_WARMUP_EPOCHS", "RESUME_MODEL", "RESUME_OPTIMIZER", "RESUME_SCHEDULER", "EPOCHS", "SCHEDULER_MILESTONES", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "EARLY_STOP", "ID_LOSS_WEIGHT", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
+# Show resolved key values for BFT-official + Muon.
+config-tracklet-bft-official-muon:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_bft_official_muon_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["OPTIMIZER_TYPE", "SCHEDULER_TYPE", "LR_WARMUP_EPOCHS", "MUON_LR", "MUON_ADAM_LR", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "EPOCHS", "EARLY_STOP", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
+# Show resolved key values for BFT-official + AdamW ScheduleFree.
+config-tracklet-bft-official-schedulefree:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{tracklet_bft_official_schedulefree_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["OPTIMIZER_TYPE", "SCHEDULER_TYPE", "SCHEDULEFREE_LR", "SCHEDULEFREE_WEIGHT_DECAY", "LR_WARMUP_EPOCHS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "EPOCHS", "EARLY_STOP", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
+config-applemots-smoke:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{applemots_smoke_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["DATASETS", "DATASET_SPLITS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "MAX_TRAIN_STEPS", "DETR_PRETRAIN", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
+config-applemots-bft-schedulefree:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{applemots_bft_schedulefree_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["DATASETS", "DATASET_SPLITS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "REL_PE_LENGTH", "MISS_TOLERANCE", "AUG_RESIZE_SCALES", "AUG_MAX_SIZE", "AUG_NUM_GROUPS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "OPTIMIZER_TYPE", "SCHEDULER_TYPE", "RESUME_MODEL", "EPOCHS", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "EARLY_STOP", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
+config-applemots-bft-sl8-pretrain:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python -c 'from configs.util import load_super_config; from utils.misc import yaml_to_dict; cfg = yaml_to_dict("{{applemots_bft_sl8_pretrain_config}}"); cfg = load_super_config(cfg, cfg["SUPER_CONFIG_PATH"]); keys = ["DATASETS", "DATASET_SPLITS", "PSEUDOMOT_SUB_DIR", "SAMPLE_LENGTHS", "SAMPLE_INTERVALS", "REL_PE_LENGTH", "MISS_TOLERANCE", "AUG_RESIZE_SCALES", "AUG_MAX_SIZE", "AUG_NUM_GROUPS", "NUM_ID_VOCABULARY", "NUM_TRAINING_IDS", "OPTIMIZER_TYPE", "SCHEDULER_TYPE", "RESUME_MODEL", "EPOCHS", "MAX_TRAIN_STEPS", "AMP_DTYPE", "EMA_ENABLED", "EARLY_STOP", "OUTPUTS_DIR", "EXP_NAME"]; [print(f"{key}={cfg.get(key)}") for key in keys]'
+
 # Launch the FULL tracklet training (background recommended; started in B6, not here).
 train-tracklet-full:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_full_config}}"
@@ -109,6 +169,53 @@ train-tracklet-5fps:
 # Fine-tune from checkpoint_39 on Optuna-retracked pseudo labels.
 train-tracklet-retrack-optuna:
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_retrack_optuna_config}}"
+
+# Fine-tune with BFT-official tracking weights and BFT-style temporal sampling.
+train-tracklet-bft-official:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_bft_official_config}}"
+
+# Fine-tune with BFT-official tracking weights and Muon optimizer.
+train-tracklet-bft-official-muon:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_bft_official_muon_config}}"
+
+# Fine-tune with BFT-official tracking weights and AdamW ScheduleFree optimizer.
+train-tracklet-bft-official-schedulefree:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_bft_official_schedulefree_config}}"
+
+train-applemots-smoke:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{applemots_smoke_config}}"
+
+transplant-applemots-bft-schedulefree:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/transplant_motip_tracking_weights.py \
+        --source "{{motip_bft_ckpt}}" --source-url "{{motip_bft_url}}" \
+        --target-config "{{applemots_bft_schedulefree_config}}" \
+        --target-base-checkpoint "{{motip_bft_ckpt}}" \
+        --output "pretrains/motip_bft_tracking_to_applemots_sl20.pth" \
+        --report-json "reports/motip_bft_tracking_to_applemots_sl20_transfer_report.json"
+
+train-applemots-bft-schedulefree:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{applemots_bft_schedulefree_config}}"
+
+train-applemots-bft-schedulefree-smoke STEPS="60":
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{applemots_bft_schedulefree_config}}" -u MAX_TRAIN_STEPS="{{STEPS}}" EPOCHS=1 OUTPUTS_DIR="./outputs/applemots_pseudomot_bft_official_schedulefree_smoke" EXP_NAME="applemots_pseudomot_bft_official_schedulefree_smoke"
+
+train-applemots-bft-sl8-pretrain:
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{applemots_bft_sl8_pretrain_config}}"
+
+transplant-applemots-to-tomato:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/transplant_motip_tracking_weights.py \
+        --source "{{applemots_bft_sl8_pretrain_ckpt}}" --source-url "" \
+        --target-config "{{tracklet_bft_official_schedulefree_config}}" \
+        --target-base-checkpoint "outputs/tracklet_pseudomot_retrack_optuna_ft/checkpoint_40.pth" \
+        --output "{{applemots_to_tomato_tracking_pretrain}}" \
+        --report-json "{{applemots_to_tomato_tracking_report}}" \
+        --include-prefix "trajectory_modeling." --include-prefix "id_decoder."
+
+# Smoke fine-tune tomato retrack-optuna pseudo labels from the AppleMOTS tracking pretrain.
+# NOTE: runtime_option.py defines -u as nargs="+", so all overrides must be in one -u group.
+train-tracklet-applemots-transfer-smoke STEPS="60":
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python train.py --config-path "{{tracklet_bft_official_schedulefree_config}}" \
+        -u RESUME_MODEL="{{applemots_to_tomato_tracking_pretrain}}" OUTPUTS_DIR="./outputs/tracklet_pseudomot_retrack_optuna_applemots_bft_schedulefree_smoke" EXP_NAME="tracklet_pseudomot_retrack_optuna_applemots_bft_schedulefree_smoke" MAX_TRAIN_STEPS="{{STEPS}}" EPOCHS=1 SAVE_CHECKPOINT_PER_EPOCH=1
 
 # TensorBoard for the full run (point --logdir at the run's train/tb directory).
 tb:
@@ -131,6 +238,26 @@ tracklet_5fps_optuna_study := "outputs/tracklet_pseudomot_5fps_id16/retrack_optu
 tracklet_retrack_optuna_ft_ckpt := "outputs/tracklet_pseudomot_retrack_optuna_ft/checkpoint_40.pth"
 tracklet_retrack_optuna_ft_infer_json := "outputs/tracklet_pseudomot_retrack_optuna_ft/infer_30fps/tracks.json"
 tracklet_retrack_optuna_ft_comparison_json := "outputs/tracklet_pseudomot_retrack_optuna_ft/infer_30fps/comparison_vs_optuna_retrack.json"
+tracklet_bft_tracking_pretrain := "pretrains/motip_bft_tracking_to_tomato_retrack_optuna_sl20.pth"
+tracklet_bft_tracking_report := "pretrains/motip_bft_tracking_to_tomato_retrack_optuna_sl20_report.json"
+tracklet_bft_official_ckpt := "outputs/tracklet_pseudomot_retrack_optuna_bft_official_ft/checkpoint_0.pth"
+tracklet_bft_official_infer_json := "outputs/tracklet_pseudomot_retrack_optuna_bft_official_ft/infer_30fps/tracks.json"
+tracklet_bft_official_comparison_json := "outputs/tracklet_pseudomot_retrack_optuna_bft_official_ft/infer_30fps/comparison_vs_optuna_retrack.json"
+tracklet_applemots_transfer_ckpt := "outputs/tracklet_pseudomot_retrack_optuna_applemots_bft_schedulefree_smoke/checkpoint_0.pth"
+tracklet_applemots_transfer_infer_json := "outputs/tracklet_pseudomot_retrack_optuna_applemots_bft_schedulefree_smoke/infer_30fps/tracks.json"
+tracklet_applemots_transfer_comparison_json := "outputs/tracklet_pseudomot_retrack_optuna_applemots_bft_schedulefree_smoke/infer_30fps/comparison_vs_optuna_retrack.json"
+
+# Create a full tomato-target checkpoint with official BFT MOTIP tracking modules
+# transplanted. BFT source is downloaded if missing; tomato detector-compatible
+# weights come from the retrack-optuna checkpoint_40 target base.
+transplant-motip-bft-tracking:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/transplant_motip_tracking_weights.py \
+        --source "{{motip_bft_ckpt}}" --source-url "{{motip_bft_url}}" \
+        --target-config "{{tracklet_bft_official_config}}" \
+        --target-base-checkpoint "{{tracklet_retrack_optuna_ft_ckpt}}" \
+        --output "{{tracklet_bft_tracking_pretrain}}" \
+        --report-json "{{tracklet_bft_tracking_report}}" \
+        --include-prefix "trajectory_modeling." --include-prefix "id_decoder."
 
 # Run MOTIP tracking inference on the tomato sequence -> JSON (+ MOTChallenge txt). MAX=0 = all frames.
 infer-tracklet-full MAX="0" DTYPE="fp32":
@@ -154,6 +281,14 @@ infer-tracklet-retrack-optuna-ft MAX="0" DTYPE="fp32" CKPT=tracklet_retrack_optu
         --config "{{tracklet_retrack_optuna_config}}" --checkpoint "{{CKPT}}" --use-ema \
         --image-dir "{{tracklet_seq_images}}" --output-json "{{tracklet_retrack_optuna_ft_infer_json}}" \
         --output-mot "outputs/tracklet_pseudomot_retrack_optuna_ft/infer_30fps/tracks_mot.txt" \
+        --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
+
+# Run BFT-official tracking-transfer checkpoint over the original 30FPS image sequence.
+infer-tracklet-bft-official MAX="0" DTYPE="fp32" CKPT=tracklet_bft_official_ckpt:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/infer_tracklet.py \
+        --config "{{tracklet_bft_official_config}}" --checkpoint "{{CKPT}}" --use-ema \
+        --image-dir "{{tracklet_seq_images}}" --output-json "{{tracklet_bft_official_infer_json}}" \
+        --output-mot "outputs/tracklet_pseudomot_retrack_optuna_bft_official_ft/infer_30fps/tracks_mot.txt" \
         --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
 
 # Render tracking JSON -> annotated frames + mp4. MAX=0 = all, FPS default 3.
@@ -188,6 +323,14 @@ video-tracklet-retrack-optuna-ft FPS="3" MAX="0":
         --output-video "outputs/tracklet_pseudomot_retrack_optuna_ft/infer_30fps/tracks.mp4" \
         --fps "{{FPS}}" --show-score --max-frames "{{MAX}}"
 
+# Render BFT-official tracking-transfer inference JSON -> mp4 only.
+video-tracklet-bft-official FPS="3" MAX="0":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/visualize_tracks.py \
+        --tracks-json "{{tracklet_bft_official_infer_json}}" --image-dir "{{tracklet_seq_images}}" \
+        --output-dir "" \
+        --output-video "outputs/tracklet_pseudomot_retrack_optuna_bft_official_ft/infer_30fps/tracks.mp4" \
+        --fps "{{FPS}}" --show-score --max-frames "{{MAX}}"
+
 # Compare old full-run tracking JSON and new 5FPS fine-tuned tracking JSON.
 compare-tracklet-5fps:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/compare_track_json.py \
@@ -199,6 +342,34 @@ compare-tracklet-retrack-optuna-ft:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/compare_track_json.py \
         --old-json "{{tracklet_5fps_optuna_retrack_json}}" --new-json "{{tracklet_retrack_optuna_ft_infer_json}}" \
         --output-json "{{tracklet_retrack_optuna_ft_comparison_json}}"
+
+# Compare Optuna re-tracked pseudo labels and BFT tracking-transfer MOTIP output.
+compare-tracklet-bft-official:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/compare_track_json.py \
+        --old-json "{{tracklet_5fps_optuna_retrack_json}}" --new-json "{{tracklet_bft_official_infer_json}}" \
+        --output-json "{{tracklet_bft_official_comparison_json}}"
+
+# Run the AppleMOTS-pretrained tomato transfer checkpoint over the original 30FPS image sequence.
+infer-tracklet-applemots-transfer MAX="0" DTYPE="fp32" CKPT=tracklet_applemots_transfer_ckpt:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/infer_tracklet.py \
+        --config "{{tracklet_bft_official_schedulefree_config}}" --checkpoint "{{CKPT}}" --use-ema \
+        --image-dir "{{tracklet_seq_images}}" --output-json "{{tracklet_applemots_transfer_infer_json}}" \
+        --output-mot "outputs/tracklet_pseudomot_retrack_optuna_applemots_bft_schedulefree_smoke/infer_30fps/tracks_mot.txt" \
+        --max-frames "{{MAX}}" --dtype "{{DTYPE}}"
+
+# Render AppleMOTS-pretrained tomato transfer inference JSON -> mp4 only.
+video-tracklet-applemots-transfer FPS="3" MAX="0":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/visualize_tracks.py \
+        --tracks-json "{{tracklet_applemots_transfer_infer_json}}" --image-dir "{{tracklet_seq_images}}" \
+        --output-dir "" \
+        --output-video "outputs/tracklet_pseudomot_retrack_optuna_applemots_bft_schedulefree_smoke/infer_30fps/tracks.mp4" \
+        --fps "{{FPS}}" --show-score --max-frames "{{MAX}}"
+
+# Compare Optuna re-tracked pseudo labels and AppleMOTS-pretrained tomato transfer output.
+compare-tracklet-applemots-transfer:
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/compare_track_json.py \
+        --old-json "{{tracklet_5fps_optuna_retrack_json}}" --new-json "{{tracklet_applemots_transfer_infer_json}}" \
+        --output-json "{{tracklet_applemots_transfer_comparison_json}}"
 
 # Re-track frame-level MOTIP bbox detections with a ByteTrack-style IoU tracker.
 # Defaults are tuned for the tomato sequence; outputs are JSON + MOTChallenge txt + summary.
