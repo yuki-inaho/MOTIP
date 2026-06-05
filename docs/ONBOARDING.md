@@ -35,6 +35,7 @@
 | 調査レポート | `(local)` `motip_sandbox/temp/report_Jun04-2026_deim_experiment_management.md` | DEIM 実験管理スタックの原典照合レポート（file:line 索引） |
 | 本格学習 config | `configs/train_tracklet_pseudomot_full.yaml` | 本番学習設定（bf16/EMA/TB/early-stop, MAX_TRAIN_STEPS 無し） |
 | smoke config | `configs/train_tracklet_pseudomot_smoke.yaml` | 2-step 健全性確認用 |
+| 5FPS/後段tracker作業記録 | `reports/workdoc_Jun04-2026_motip_5fps_id_finetune.md` | 5FPS ID fine-tune、saturation判定、後段ByteTrack風再ID付け、DoD、作業証跡 |
 | テスト資産 | `tests/` | 変換 / loader / collate / getitem / early-stop / cli-override / ema / tensorboard / train-loop-control |
 | 既存ドキュメント | `docs/{GET_STARTED,INSTALL,DATASET,TUTORIAL,MODEL_ZOO}.md` | MOTIP 本家のセットアップ・データ・チュートリアル |
 | エージェントチーム運用 | `(local)` `/workspace/CLAUDE.md`, `.claude/roles/{worker,audit}.txt` | 統括 / 作業 / 監査の 3 ロール運用、承認ループ |
@@ -97,9 +98,12 @@
   just visualize-tracklet-full [N]             # 推論JSONを元フレームへ描画 → 注釈フレーム＋mp4
   just video-tracklet-5fps 3 0                 # 5FPS fine-tuned推論JSONから3fps mp4のみ生成
   just compare-tracklet-5fps                   # 旧full runと5FPS fine-tuneのID proxy metrics比較
+  just retrack-tracklet-5fps                    # 5FPS推論bbox列をByteTrack風に再ID付け → JSON/MOT/summary
+  just video-retrack-tracklet-5fps 3 0          # 後段tracker結果から3fps mp4のみ生成
   ```
   - 推論/可視化は `tools/infer_tracklet.py`（`RuntimeTracker` を frame毎に回し `outputs/.../infer/tracks.json` と `tracks_mot.txt` を出力）/ `tools/visualize_tracks.py`（JSON+元画像→ bbox+ID 描画）。既定で `checkpoint_7.pth` の EMA 重みを使用。出力は `outputs/`（git外）。
   - 5FPS ID fine-tuneは `tools/convert_coco_tracklets_to_pseudomot.py --frame-stride 6` で `datasets/TomatoTrackletMOT_5fps`（git外）を作り、`configs/finetune_tracklet_pseudomot_5fps_id16.yaml` で学習する。既定推論checkpointはsaturation判定で採用した `checkpoint_39.pth`。旧新比較は `tools/compare_track_json.py` が `unique_track_ids / detections` と track length proxy を出す。
+  - 5FPS fine-tune単体では推論IDが毎フレーム変わるため、`tools/retrack_detections.py` は `tracks.json` の `track_id` を使わず bbox/score/category を検出列として扱い、ByteTrack風のIoU+速度予測でIDを付け直す。採用設定は `track_thresh=0.80`, `new_track_thresh=0.95`, `match_thresh=0.10`, `max_age=60`。成果物は `outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/`（git外）で、`summary.json` は raw比 `unique_ids_per_detection: 1.0 -> 0.062644`, `track_length_max: 114`, `bottom_to_top_tracks: 101` を記録する。確認用動画は `outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/tracks.mp4`（1219 frames, 3fps, 800x600）。
 - **依存ライブラリ:** torch 2.4.0+cu118 / torchvision / accelerate / tensorboard / einops / opencv-python / pycocotools / numpy<2 / pytest / ruff（詳細は `pyproject.toml` と `uv.lock`）。CUDA op: `models/ops`（`just build-ops`）。
 - **連絡先/責任者:** yoshikawa@inaho.co（yuki-inaho）。
 

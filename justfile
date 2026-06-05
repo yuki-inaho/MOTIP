@@ -101,6 +101,9 @@ tracklet_infer_json := "outputs/tracklet_pseudomot_full/infer/tracks.json"
 tracklet_5fps_ckpt := "outputs/tracklet_pseudomot_5fps_id16/checkpoint_39.pth"
 tracklet_5fps_infer_json := "outputs/tracklet_pseudomot_5fps_id16/infer_30fps/tracks.json"
 tracklet_5fps_comparison_json := "outputs/tracklet_pseudomot_5fps_id16/infer_30fps/comparison.json"
+tracklet_5fps_retrack_json := "outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/tracks.json"
+tracklet_5fps_retrack_mot := "outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/tracks_mot.txt"
+tracklet_5fps_retrack_summary := "outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/summary.json"
 
 # Run MOTIP tracking inference on the tomato sequence -> JSON (+ MOTChallenge txt). MAX=0 = all frames.
 infer-tracklet-full MAX="0" DTYPE="fp32":
@@ -147,3 +150,23 @@ compare-tracklet-5fps:
     PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/compare_track_json.py \
         --old-json "{{tracklet_infer_json}}" --new-json "{{tracklet_5fps_infer_json}}" \
         --output-json "{{tracklet_5fps_comparison_json}}"
+
+# Re-track frame-level MOTIP bbox detections with a ByteTrack-style IoU tracker.
+# Defaults are tuned for the tomato sequence; outputs are JSON + MOTChallenge txt + summary.
+retrack-tracklet-5fps TRACK="0.80" LOW="0.20" NEW="0.95" MATCH="0.10" LOW_MATCH="0.10" MAX_AGE="60" NMS="0.70" VEL="1.0":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/retrack_detections.py \
+        --input-json "{{tracklet_5fps_infer_json}}" \
+        --output-json "{{tracklet_5fps_retrack_json}}" \
+        --output-mot "{{tracklet_5fps_retrack_mot}}" \
+        --summary-json "{{tracklet_5fps_retrack_summary}}" \
+        --track-thresh "{{TRACK}}" --low-thresh "{{LOW}}" --new-track-thresh "{{NEW}}" \
+        --match-thresh "{{MATCH}}" --low-match-thresh "{{LOW_MATCH}}" \
+        --max-age "{{MAX_AGE}}" --nms-iou "{{NMS}}" --velocity-weight "{{VEL}}"
+
+# Render re-tracked bbox IDs -> mp4 only. FPS default 3, MAX=0 = all.
+video-retrack-tracklet-5fps FPS="3" MAX="0":
+    PYTHONPATH=. UV_PROJECT_ENVIRONMENT="{{venv}}" uv run --no-sync python tools/visualize_tracks.py \
+        --tracks-json "{{tracklet_5fps_retrack_json}}" --image-dir "{{tracklet_seq_images}}" \
+        --output-dir "" \
+        --output-video "outputs/tracklet_pseudomot_5fps_id16/retrack_bytetrack/tracks.mp4" \
+        --fps "{{FPS}}" --show-score --max-frames "{{MAX}}"
